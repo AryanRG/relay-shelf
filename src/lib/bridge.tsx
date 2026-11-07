@@ -100,6 +100,16 @@ export function BridgeProvider({ children }: { children: ReactNode }) {
         snapshot: "Saving snapshot…",
         exportZip: "Exporting ZIP…",
         exportPDF: "Exporting PDF…",
+        chooseFolder: "Choosing folder…",
+        addDestination: "Saving destination…",
+        removeDestination: "Removing destination…",
+        copyToDestination: "Copying to destination…",
+        processFiles: "Processing files…",
+        captureScreenshot: "Select an area to capture…",
+        listShortcuts: "Loading shortcuts…",
+        runShortcut: "Running shortcut…",
+        showFloatingShelf: "Opening floating shelf…",
+        reopenFloatingShelf: "Reopening floating shelf…",
       };
       const initialRevision = revision.current;
       const id = ++nextPending.current;

@@ -1,6 +1,6 @@
 {
   "name": "relay-shelf",
-  "version": "1.0.1",
+  "version": "1.1.0",
   "private": true,
   "description": "A personal macOS file shelf with path capture and document previews",
   "author": "Aryan R. Ganjoo",

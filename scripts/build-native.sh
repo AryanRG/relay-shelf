@@ -5,7 +5,7 @@ APP="${RELAY_APP_OUTPUT:-../Relay Shelf.app}"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources/web"
 swiftc -swift-version 5 -target arm64-apple-macos14.0 -O -whole-module-optimization native/*.swift \
   -o "$APP/Contents/MacOS/RelayShelf" \
-  -framework AppKit -framework WebKit -framework PDFKit -framework Carbon -framework ServiceManagement
+  -framework AppKit -framework WebKit -framework PDFKit -framework Carbon -framework ServiceManagement -framework Vision
 cp native/Info.plist "$APP/Contents/Info.plist"
 cp LICENSE "$APP/Contents/Resources/LICENSE"
 rsync -a --delete dist/ "$APP/Contents/Resources/web/"

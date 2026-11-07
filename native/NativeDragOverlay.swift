@@ -14,6 +14,9 @@ final class ShelfDropView: NSVisualEffectView, NSDraggingSource {
   private var tracking: NSTrackingArea?
   private let title = NSTextField(labelWithString: "Drop into Relay Shelf")
   private let subtitle = NSTextField(labelWithString: "Files, links, images & text")
+  private let dockLeft = NSButton(title: "Dock left", target: nil, action: nil)
+  private let dockRight = NSButton(title: "Dock right", target: nil, action: nil)
+  private let undock = NSButton(title: "Undock", target: nil, action: nil)
 
   override init(frame frameRect: NSRect) {
     super.init(frame: frameRect)
@@ -32,7 +35,8 @@ final class ShelfDropView: NSVisualEffectView, NSDraggingSource {
     icon.contentTintColor = .controlAccentColor
     title.font = .systemFont(ofSize: 13, weight: .semibold)
     title.lineBreakMode = .byTruncatingMiddle
-    subtitle.font = .systemFont(ofSize: 11)
+    title.maximumNumberOfLines = 1
+    subtitle.font = .systemFont(ofSize: 12)
     subtitle.textColor = .secondaryLabelColor
     // Labels pass mouse events to the panel's drag source.
     for label in [title, subtitle] { label.isSelectable = false }
@@ -40,7 +44,19 @@ final class ShelfDropView: NSVisualEffectView, NSDraggingSource {
     let close = NSButton(title: "Close", target: self, action: #selector(closeShelf))
     let controls = NSStackView(views: [open, close])
     controls.spacing = 8
-    let stack = NSStackView(views: [icon, title, subtitle, controls])
+    dockLeft.target = self
+    dockLeft.action = #selector(dockLeftShelf)
+    dockRight.target = self
+    dockRight.action = #selector(dockRightShelf)
+    undock.target = self
+    undock.action = #selector(undockShelf)
+    dockLeft.toolTip = "Keep this shelf at the left edge of the nearest screen"
+    dockRight.toolTip = "Keep this shelf at the right edge of the nearest screen"
+    undock.toolTip = "Resume closing after 60 seconds idle"
+    let docking = NSStackView(views: [dockLeft, dockRight, undock])
+    docking.spacing = 8
+    undock.isHidden = true
+    let stack = NSStackView(views: [icon, title, subtitle, docking, controls])
     stack.orientation = .vertical
     stack.spacing = 8
     stack.translatesAutoresizingMaskIntoConstraints = false
@@ -50,6 +66,9 @@ final class ShelfDropView: NSVisualEffectView, NSDraggingSource {
       stack.centerYAnchor.constraint(equalTo: centerYAnchor),
       stack.widthAnchor.constraint(equalTo: widthAnchor, constant: -28),
       title.widthAnchor.constraint(lessThanOrEqualTo: stack.widthAnchor),
+      subtitle.widthAnchor.constraint(lessThanOrEqualTo: stack.widthAnchor),
+      stack.topAnchor.constraint(greaterThanOrEqualTo: topAnchor, constant: 20),
+      stack.bottomAnchor.constraint(lessThanOrEqualTo: bottomAnchor, constant: -16),
       icon.heightAnchor.constraint(equalToConstant: 26),
       icon.widthAnchor.constraint(equalToConstant: 30),
     ])
@@ -69,19 +88,29 @@ final class ShelfDropView: NSVisualEffectView, NSDraggingSource {
     return self
   }
 
-  func update(ids: [String], name: String?, pending: Int, failed: Bool) {
+  func update(ids: [String], name: String?, pending: Int, failed: Bool,
+              dockEdge: FloatingShelfLifecycle.DockEdge? = nil) {
     self.ids = ids
     title.stringValue = ids.isEmpty
       ? (pending > 0 ? "Adding to Relay Shelf…" : "Drop into Relay Shelf")
       : (ids.count == 1 ? (name ?? "1 item") : "\(ids.count) items · \(name ?? "Relay Shelf")")
     subtitle.stringValue = pending > 0 ? "Receiving \(pending) drop\(pending == 1 ? "" : "s")…"
       : (ids.isEmpty ? "Files, links, images & text" : "Drag items out · closes after 60s idle")
+    if dockEdge != nil && pending == 0 { subtitle.stringValue = "Docked · stays until closed or dragged out" }
     if failed { subtitle.stringValue = "Nothing added · try dropping again" }
+    dockLeft.isHidden = dockEdge == .left
+    dockRight.isHidden = dockEdge == .right
+    undock.isHidden = dockEdge == nil
+    title.toolTip = title.stringValue
+    subtitle.toolTip = subtitle.stringValue
     setAccessibilityValue(title.stringValue)
   }
 
   @objc private func openShelf() { controller?.openShelf() }
   @objc private func closeShelf() { controller?.closeFloatingShelf() }
+  @objc private func dockLeftShelf() { controller?.dockFloatingShelf(edge: "left") }
+  @objc private func dockRightShelf() { controller?.dockFloatingShelf(edge: "right") }
+  @objc private func undockShelf() { controller?.dockFloatingShelf(edge: "none") }
 
   override func updateTrackingAreas() {
     super.updateTrackingAreas()
@@ -97,6 +126,7 @@ final class ShelfDropView: NSVisualEffectView, NSDraggingSource {
   override func mouseDown(with event: NSEvent) {
     guard let window else { return }
     if convert(event.locationInWindow, from: nil).y >= bounds.maxY - 18 {
+      controller?.dockFloatingShelf(edge: "none")
       window.performDrag(with: event)
       return
     }
@@ -109,7 +139,10 @@ final class ShelfDropView: NSVisualEffectView, NSDraggingSource {
       if hypot(next.locationInWindow.x - event.locationInWindow.x,
                next.locationInWindow.y - event.locationInWindow.y) >= 4 {
         if draggable { controller?.beginNativeDrag(ids: ids, event: next, source: self) }
-        else { window.performDrag(with: next) }
+        else {
+          controller?.dockFloatingShelf(edge: "none")
+          window.performDrag(with: next)
+        }
         return
       }
     }

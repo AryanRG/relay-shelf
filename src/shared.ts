@@ -28,6 +28,25 @@ export interface WatchedFolder {
   shelfId: string;
   enabled: boolean;
 }
+export interface Destination {
+  id: string;
+  name: string;
+  path: string;
+}
+export type FileOperation =
+  | "resizeImage"
+  | "convertImage"
+  | "compressImage"
+  | "stripMetadata"
+  | "ocr"
+  | "mergePDF"
+  | "imagesToPDF";
+export interface FileProcessingOptions {
+  width?: number;
+  height?: number;
+  format?: "png" | "jpeg" | "heic";
+  quality?: number;
+}
 export interface Settings {
   theme: "system" | "light" | "dark";
   activation: "shake" | "edge" | "drag" | "off";
@@ -42,9 +61,11 @@ export interface ShelfState {
   shelves: Shelf[];
   items: ShelfItem[];
   watchedFolders: WatchedFolder[];
+  destinations: Destination[];
   settings: Settings;
   canUndo: boolean;
   helperAvailable: boolean;
+  capturedIDs?: string[]; // Present on a screenshot action response; empty on cancellation.
 }
 export interface ResolvedPath {
   input: string;
@@ -125,6 +146,17 @@ exportZip {ids} -> {path?:string}
 exportPDF {path} -> {path?:string}
 updateSettings {settings:Partial<Settings>} -> ShelfState
 addWatch {path,shelfId} / removeWatch {id} / toggleWatch {id,enabled} -> ShelfState
+addDestination {path,name?} / removeDestination {id} -> ShelfState
+copyToDestination {ids:string[],destinationId} -> {paths:string[]}
+processFiles {ids:string[],shelfId,operation:FileOperation,options?:FileProcessingOptions} -> ShelfState
+  resizeImage: width defaults to 1600, height optional (pixels)
+  convertImage: format png/jpeg/heic; compressImage: quality 0.1..1, default 0.75
+  stripMetadata: images; ocr: images/PDF to .txt
+  mergePDF / imagesToPDF: ids specify the input order
+captureScreenshot {shelfId} -> ShelfState (interactive selection; cancellation returns unchanged state)
+listShortcuts -> string[]
+runShortcut {ids:string[],shelfId,name} -> ShelfState (adds shortcut outputs)
+showFloatingShelf {ids:string[]} / reopenFloatingShelf -> null
 locate {id} -> ShelfState (native picker to relink missing file)
 openExternal {url} -> void (http/https only)
 Window state pushes follow every mutation. UI must show errors and empty states.

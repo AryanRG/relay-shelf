@@ -1,15 +1,22 @@
 import AppKit
 import Foundation
+import WebKit
 
 @main
 @MainActor
 struct DragControllerTests {
   static func main() async throws {
     testLifecycle()
+    testDocking()
+    testCaptureLifecycle()
+    testFloatingControls()
     let files = FileManager.default
     let temporary = files.temporaryDirectory.appendingPathComponent("RelayDragTests-\(UUID())")
     try files.createDirectory(at: temporary, withIntermediateDirectories: true)
     defer { try? files.removeItem(at: temporary) }
+    try await testCapturePanel(at: temporary.appendingPathComponent("Capture"))
+    try await testHistory(at: temporary.appendingPathComponent("History"))
+    try await testHistoryLimit(at: temporary.appendingPathComponent("Limit"))
     let root = temporary.appendingPathComponent("Store")
     let store = try ShelfStore(root: root)
     var reveals = 0
@@ -118,6 +125,346 @@ struct DragControllerTests {
     precondition(items(reopened).count == items(store).count)
     precondition(store.fileURLs(for: firstIDs) == [source])
     print("PASS multi-file promises, cancellation, late completion, protected timeout and persistence")
+  }
+
+  private static func testDocking() {
+    var now: TimeInterval = 0
+    let shelf = FloatingShelfLifecycle(now: { now })
+    shelf.showRetained(ids: ["retained"])
+    shelf.setDocked(.left)
+    now = 180
+    shelf.expire()
+    shelf.resetExternalDrag()
+    precondition(shelf.isVisible && shelf.dockEdge == .left && shelf.deadline == nil)
+    let token = shelf.beginImport()
+    shelf.completeImport(token, ids: ["new"])
+    precondition(shelf.itemIDs == ["retained", "new"] && shelf.dockEdge == .left)
+    shelf.beginOutgoingDrag()
+    shelf.endOutgoingDrag(succeeded: false)
+    precondition(shelf.isVisible && shelf.deadline == nil && shelf.dockEdge == .left)
+    shelf.setDocked(.right)
+    shelf.setHovered(true)
+    shelf.setDocked(nil)
+    precondition(shelf.deadline == nil, "Undocking must respect hover/import/drag pauses")
+    shelf.setHovered(false)
+    precondition(shelf.deadline == 240)
+    now = 239
+    shelf.expire()
+    precondition(shelf.isVisible)
+    now = 240
+    shelf.expire()
+    precondition(!shelf.isVisible && shelf.dockEdge == nil)
+    shelf.showTarget()
+    shelf.setDocked(.left)
+    shelf.resetExternalDrag()
+    precondition(shelf.isVisible, "An explicitly docked empty target must stay available")
+    shelf.showRetained(ids: ["again"])
+    precondition(shelf.dockEdge == .left)
+    shelf.beginOutgoingDrag()
+    shelf.endOutgoingDrag(succeeded: true)
+    precondition(!shelf.isVisible && shelf.dockEdge == nil)
+    shelf.showRetained(ids: ["reopened"])
+    precondition(shelf.deadline == 300 && shelf.dockEdge == nil)
+
+    let left = NSRect(x: -1440, y: 50, width: 1440, height: 850)
+    let right = NSRect(x: 0, y: 25, width: 1920, height: 1055)
+    let frame = NSRect(x: -1500, y: 1000, width: 320, height: 206)
+    let docked = DragController.dockedFrame(frame, edge: .left, visibleFrames: [right, left])
+    precondition(docked.minX == left.minX + 8 && left.contains(docked))
+    precondition(docked.maxY == left.maxY - 8)
+    let other = DragController.dockedFrame(
+      NSRect(x: 2100, y: -400, width: 320, height: 206), edge: .right,
+      visibleFrames: [left, right])
+    precondition(other.maxX == right.maxX - 8 && right.contains(other))
+    // A removed monitor's coordinates clamp onto the nearest remaining monitor.
+    let recovered = DragController.dockedFrame(frame, edge: .right, visibleFrames: [right])
+    precondition(right.contains(recovered))
+    print("PASS docking pauses expiry, undocking rearms, docked drops and nearest visible screen bounds")
+  }
+
+  private static func testCaptureLifecycle() {
+    var now: TimeInterval = 0
+    let shelf = FloatingShelfLifecycle(now: { now })
+    shelf.showRetained(ids: ["retained"])
+    shelf.setHovered(true)
+    shelf.setCapturePresentationHidden(true)
+    now = 180
+    shelf.expire()
+    precondition(shelf.isVisible && shelf.itemIDs == ["retained"] && shelf.deadline == nil)
+    let token = shelf.beginImport()
+    shelf.completeImport(token, ids: ["imported"])
+    shelf.setHovered(true) // Stale tracking events must not leave restoration stuck hovered.
+    shelf.setCapturePresentationHidden(false)
+    precondition(shelf.itemIDs == ["retained", "imported"] && shelf.deadline == 240)
+    now = 200
+    shelf.setCapturePresentationHidden(false)
+    precondition(shelf.deadline == 240, "Repeated restoration must not extend idle time")
+    shelf.setDocked(.right)
+    shelf.setCapturePresentationHidden(true)
+    now = 400
+    shelf.expire()
+    shelf.setCapturePresentationHidden(false)
+    precondition(shelf.isVisible && shelf.dockEdge == .right && shelf.deadline == nil)
+    shelf.setDocked(nil)
+    precondition(shelf.deadline == 460)
+
+    shelf.setCapturePresentationHidden(true)
+    let old = shelf.beginImport()
+    shelf.dismiss()
+    shelf.showTarget()
+    shelf.resetExternalDrag()
+    precondition(!shelf.isVisible && shelf.isCapturePresentationHidden)
+    let fresh = shelf.beginImport()
+    shelf.completeImport(old, ids: ["stale"])
+    precondition(shelf.pendingCount == 1 && shelf.itemIDs.isEmpty)
+    now = 600
+    shelf.completeImport(fresh, ids: ["fresh"])
+    shelf.expire()
+    precondition(shelf.isVisible && shelf.isCapturePresentationHidden && shelf.deadline == nil)
+    shelf.showRetained(ids: ["reopened"])
+    precondition(shelf.isCapturePresentationHidden && shelf.deadline == nil)
+    shelf.setCapturePresentationHidden(false)
+    precondition(shelf.deadline == 660)
+    now = 660
+    shelf.expire()
+    precondition(!shelf.isVisible)
+
+    shelf.setCapturePresentationHidden(true)
+    let pending = shelf.beginImport()
+    shelf.setCapturePresentationHidden(false)
+    precondition(shelf.pendingCount == 1 && shelf.deadline == nil)
+    shelf.completeImport(pending, ids: ["completed"])
+    precondition(shelf.deadline == 720)
+    shelf.setCapturePresentationHidden(true)
+    shelf.dismiss()
+    shelf.setCapturePresentationHidden(false)
+    precondition(!shelf.isVisible && shelf.deadline == nil)
+    print("PASS capture pause survives dismissal/replacement, retains imports/docking and resumes fresh idle expiry")
+  }
+
+  private static func testCapturePanel(at root: URL) async throws {
+    let store = try ShelfStore(root: root)
+    let ids = await store.captureDroppedText("Capture-retained note")
+    let controller = DragController(store: store, root: root, reveal: {}, notice: { _ in })
+    let host = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 400, height: 300),
+      styleMask: [.borderless], backing: .buffered, defer: false)
+    host.isReleasedWhenClosed = false
+    let webView = RelayWebView(frame: host.contentView!.bounds, configuration: WKWebViewConfiguration())
+    host.contentView!.addSubview(webView)
+    controller.attach(to: webView)
+    defer { controller.stop(); host.close() }
+    try controller.showFloatingShelf(ids: ids)
+    guard let panel = NSApp.windows.first(where: {
+      ($0.contentView as? ShelfDropView)?.controller === controller
+    }) else { preconditionFailure("Floating panel was not created") }
+    precondition(panel.isVisible)
+    controller.dockFloatingShelf(edge: "left")
+    let dockedFrame = panel.frame
+    let history = store.root.appendingPathComponent("floating-shelf.json")
+    let saved = try Data(contentsOf: history)
+    controller.setCapturePresentationHidden(true)
+    let hiddenHistory = try Data(contentsOf: history)
+    precondition(!panel.isVisible && controller.floatingShelf.isVisible)
+    precondition(controller.floatingShelf.dockEdge == .left && saved == hiddenHistory)
+    let promise = TestPromiseReceiver(names: ["during-capture.txt"])
+    precondition(controller.receivePromises([promise]))
+    try promise.deliver(0)
+    try await waitFor { controller.floatingShelf.pendingCount == 0 }
+    precondition(!panel.isVisible && controller.floatingShelf.itemIDs.count == 2)
+    controller.setCapturePresentationHidden(false)
+    precondition(panel.isVisible && controller.floatingShelf.dockEdge == .left)
+    precondition(panel.frame == dockedFrame && controller.floatingShelf.deadline == nil)
+
+    controller.setCapturePresentationHidden(true)
+    controller.closeFloatingShelf()
+    let board = NSPasteboard.withUniqueName()
+    defer { board.releaseGlobally() }
+    board.setString("New drop during capture", forType: .string)
+    precondition(controller.receive(pasteboard: board))
+    try await waitFor { controller.floatingShelf.pendingCount == 0 }
+    precondition(!panel.isVisible && controller.floatingShelf.isVisible)
+    precondition(controller.floatingShelf.itemIDs.count == 1 && controller.floatingShelf.deadline == nil)
+    let resumedAt = ProcessInfo.processInfo.systemUptime
+    controller.setCapturePresentationHidden(false)
+    precondition(panel.isVisible && controller.floatingShelf.deadline! >= resumedAt + 60)
+    controller.setCapturePresentationHidden(true)
+    controller.closeFloatingShelf()
+    try controller.reopenFloatingShelf()
+    precondition(!panel.isVisible && controller.floatingShelf.isVisible)
+    controller.closeFloatingShelf()
+    controller.setCapturePresentationHidden(false)
+    precondition(!panel.isVisible && !controller.floatingShelf.isVisible)
+    print("PASS visible panel capture hiding, hidden promise completion, history retention and explicit restoration")
+  }
+
+  private static func testHistory(at root: URL) async throws {
+    let store = try ShelfStore(root: root)
+    let history = store.root.appendingPathComponent("floating-shelf.json")
+    let controller = DragController(store: store, root: root, reveal: {}, notice: { _ in })
+    defer { controller.stop() }
+    precondition(!controller.canReopenFloatingShelf)
+    do {
+      try controller.reopenFloatingShelf()
+      preconditionFailure("Absent history must not invent a selection")
+    } catch {}
+    precondition(!controller.floatingShelf.isVisible)
+    _ = try await store.handle("addText", payload: ["text": "Retain actual membership"])
+    let first = items(store)[0]["id"] as! String
+    _ = try await store.handle("createShelf", payload: ["name": "Temporary project"])
+    let shelf = (store.snapshot()["shelves"] as! [[String: Any]]).last!["id"] as! String
+    _ = try await store.handle("addText", payload: ["text": "Project note", "shelfId": shelf])
+    let second = items(store).last!["id"] as! String
+    let stateURL = store.root.appendingPathComponent("shelves.json")
+    let before = try Data(contentsOf: stateURL)
+    try controller.showFloatingShelf(ids: ["/private/source.txt", first, first, "missing", second])
+    precondition(controller.floatingShelf.itemIDs == [first, second])
+    controller.dockFloatingShelf(edge: "left")
+    controller.dockFloatingShelf(edge: "invalid")
+    precondition(controller.floatingShelf.dockEdge == .left)
+    controller.closeFloatingShelf()
+    precondition(controller.canReopenFloatingShelf)
+    let saved = try JSONSerialization.jsonObject(with: Data(contentsOf: history)) as! [String: Any]
+    precondition(Set(saved.keys) == Set(["version", "ids"]))
+    precondition(saved["ids"] as? [String] == [first, second], "History must contain IDs only")
+    let restartedStore = try ShelfStore(root: root)
+    // Use a different incoming root to verify history is always kept within store.root.
+    let restarted = DragController(store: restartedStore,
+      root: root.appendingPathComponent("OtherIncomingRoot"), reveal: {}, notice: { _ in })
+    defer { restarted.stop() }
+    try restarted.reopenFloatingShelf()
+    precondition(restarted.floatingShelf.itemIDs == [first, second])
+    precondition(restarted.floatingShelf.dockEdge == nil && restarted.floatingShelf.deadline != nil)
+    restarted.floatingShelf.beginOutgoingDrag()
+    restarted.floatingShelf.endOutgoingDrag(succeeded: true)
+    try restarted.reopenFloatingShelf()
+    precondition(restarted.floatingShelf.itemIDs == [first, second])
+    let after = try Data(contentsOf: stateURL)
+    precondition(after == before, "Presentation must not mutate store membership")
+
+    // Reopening while an older provider is pending must invalidate its panel token,
+    // while keeping its files protected and allowing its store commit to finish.
+    let late = TestPromiseReceiver(names: ["older.txt"])
+    precondition(controller.receivePromises([late]))
+    try controller.reopenFloatingShelf()
+    precondition(controller.floatingShelf.pendingCount == 0)
+    let beforeLate = items(store).count
+    try late.deliver(0)
+    try await waitFor { items(store).count == beforeLate + 1 }
+    try await Task.sleep(nanoseconds: 20_000_000)
+    precondition(controller.floatingShelf.itemIDs == [first, second])
+    controller.closeFloatingShelf()
+    let pending = TestPromiseReceiver(names: ["old-timeout.txt"])
+    precondition(controller.receivePromises([pending]))
+    try controller.reopenFloatingShelf()
+    controller.promiseTimedOut(pending.identifier)
+    precondition(controller.floatingShelf.itemIDs == [first, second]
+      && controller.floatingShelf.pendingCount == 0 && !controller.floatingShelf.importFailed)
+    let beforeTimeout = items(store).count
+    try pending.deliver(0)
+    try await waitFor { items(store).count == beforeTimeout + 1 }
+    precondition(controller.floatingShelf.itemIDs == [first, second])
+    let beforeText = items(store).count
+    let textBoard = NSPasteboard.withUniqueName()
+    defer { textBoard.releaseGlobally() }
+    textBoard.setString("Pending text import", forType: .string)
+    precondition(controller.receive(pasteboard: textBoard))
+    try controller.reopenFloatingShelf()
+    try await waitFor { items(store).count == beforeText + 1 }
+    precondition(controller.floatingShelf.itemIDs == [first, second])
+    controller.dockFloatingShelf(edge: "right")
+    let board = NSPasteboard.withUniqueName()
+    defer { board.releaseGlobally() }
+    board.setString("New drop stays docked", forType: .string)
+    precondition(controller.receive(pasteboard: board))
+    try await waitFor { controller.floatingShelf.pendingCount == 0 }
+    precondition(controller.floatingShelf.dockEdge == .right && controller.floatingShelf.deadline == nil)
+    precondition(controller.floatingShelf.itemIDs.count == 3)
+    try controller.showFloatingShelf(ids: [first, second])
+    controller.closeFloatingShelf()
+
+    _ = try await store.handle("deleteShelf", payload: ["id": shelf])
+    try controller.reopenFloatingShelf()
+    precondition(controller.floatingShelf.itemIDs == [first], "Deleted shelf IDs must be ignored")
+    controller.closeFloatingShelf()
+    _ = try await store.handle("remove", payload: ["ids": [first]])
+    precondition(!controller.canReopenFloatingShelf)
+    do {
+      try controller.reopenFloatingShelf()
+      preconditionFailure("Removed items must never be recreated")
+    } catch {}
+    precondition(!controller.floatingShelf.isVisible)
+
+    try Data("{corrupt history".utf8).write(to: history, options: .atomic)
+    let migrated = DragController(store: store, root: root, reveal: {}, notice: { _ in })
+    defer { migrated.stop() }
+    precondition(!migrated.canReopenFloatingShelf)
+    let remaining = items(store)[0]["id"] as! String
+    try migrated.showFloatingShelf(ids: [remaining])
+    migrated.closeFloatingShelf()
+    try migrated.reopenFloatingShelf()
+    precondition(migrated.floatingShelf.itemIDs == [remaining])
+    print("PASS absent/corrupt history, restart recovery, ID-only persistence, removed IDs and stale pending callbacks")
+  }
+
+  private static func testHistoryLimit(at root: URL) async throws {
+    let seed = try ShelfStore(root: root)
+    _ = try await seed.handle("addText", payload: ["text": "Seed for committed IDs"])
+    let template = items(seed)[0]
+    var snapshot = seed.snapshot()
+    let ids = (0..<502).map { "committed-\($0)" }
+    snapshot["items"] = ids.map { id -> [String: Any] in
+      var item = template
+      item["id"] = id
+      return item
+    }
+    try JSONSerialization.data(withJSONObject: snapshot)
+      .write(to: root.appendingPathComponent("shelves.json"), options: .atomic)
+    let store = try ShelfStore(root: root)
+    let controller = DragController(store: store, root: root, reveal: {}, notice: { _ in })
+    defer { controller.stop() }
+    try controller.showFloatingShelf(ids: ["missing"] + ids + ids)
+    precondition(controller.floatingShelf.itemIDs == Array(ids.prefix(500)))
+    controller.closeFloatingShelf()
+    let recovered = DragController(store: store, root: root, reveal: {}, notice: { _ in })
+    defer { recovered.stop() }
+    try recovered.reopenFloatingShelf()
+    precondition(recovered.floatingShelf.itemIDs == Array(ids.prefix(500)))
+    precondition(items(store).count == 502)
+    print("PASS floating presentation and persisted history cap at 500 without removing store items")
+  }
+
+  private static func testFloatingControls() {
+    _ = NSApplication.shared
+    let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 320, height: 206),
+      styleMask: [.borderless], backing: .buffered, defer: false)
+    window.isReleasedWhenClosed = false
+    defer { window.close() }
+    let view = ShelfDropView(frame: NSRect(x: 0, y: 0, width: 320, height: 206))
+    window.contentView = view
+    func descendants(_ root: NSView) -> [NSView] {
+      root.subviews.flatMap { [$0] + descendants($0) }
+    }
+    for edge: FloatingShelfLifecycle.DockEdge? in [nil, .left, .right] {
+      view.update(ids: ["item"], name: String(repeating: "Long filename ", count: 20),
+        pending: 0, failed: false, dockEdge: edge)
+      view.layoutSubtreeIfNeeded()
+      let controls = descendants(view).filter {
+        !$0.isHiddenOrHasHiddenAncestor && ($0 is NSButton || $0 is NSTextField)
+      }
+      for control in controls {
+        let rect = view.convert(control.bounds, from: control)
+        precondition(view.bounds.insetBy(dx: -0.5, dy: -0.5).contains(rect),
+          "Floating control outside panel: \(control) at \(rect)")
+        if let button = control as? NSButton {
+          precondition(rect.width >= button.fittingSize.width - 1,
+            "Button must remain readable: \(button.title)")
+        } else if let label = control as? NSTextField, !label.stringValue.hasPrefix("Long filename") {
+          precondition(rect.width >= label.fittingSize.width - 1, "Status must fit: \(label.stringValue)")
+        }
+      }
+      precondition(controls.compactMap { $0 as? NSButton }.count == 4)
+    }
+    print("PASS native floating controls fit in undocked and both docked layouts")
   }
 
   private static func testLifecycle() {

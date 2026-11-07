@@ -9,13 +9,16 @@ import {
   ArrowUpRight,
   Clipboard,
   ClipboardPaste,
+  Camera,
   Command,
   FilePlus2,
   FolderOpen,
   Plus,
+  PanelsTopLeft,
   Search,
   Settings2,
   Undo2,
+  WandSparkles,
 } from "lucide-react";
 import type { ShelfItem } from "@/shared";
 import { useBridge } from "@/lib/bridge";
@@ -33,6 +36,7 @@ interface Entry {
   detail?: string;
   icon: ReactNode;
   shortcut?: string;
+  disabled?: boolean;
   action: () => void;
 }
 export function CommandPalette({
@@ -51,15 +55,48 @@ export function CommandPalette({
     settings: () => void;
     create: () => void;
     undo: () => void;
+    screenshot: () => void;
+    fileActions: () => void;
+    destinations: () => void;
+    reopenFloating: () => void;
   };
 }) {
-  const { state } = useBridge();
+  const { state, busy, status } = useBridge();
   const [query, setQuery] = useState("");
   const deferred = useDeferredValue(query);
   const [index, setIndex] = useState(0);
   const results = useMemo(() => {
     const q = deferred.toLowerCase().trim();
     const commands: Entry[] = [
+      {
+        id: "screenshot",
+        label: "Capture screenshot…",
+        detail: "Select an area to save to the current shelf",
+        icon: <Camera size={17} />,
+        action: actions.screenshot,
+      },
+      {
+        id: "file-actions",
+        label: "File actions…",
+        detail:
+          "Image resize, convert, compress, metadata · PDF merge · Text OCR · Destinations · Shortcuts",
+        icon: <WandSparkles size={17} />,
+        action: actions.fileActions,
+      },
+      {
+        id: "destinations",
+        label: "Manage saved destinations…",
+        detail: "Add or remove saved folders",
+        icon: <FolderOpen size={17} />,
+        action: actions.destinations,
+      },
+      {
+        id: "reopen-floating",
+        label: "Reopen floating shelf",
+        detail: "Show the floating dock",
+        icon: <PanelsTopLeft size={17} />,
+        action: actions.reopenFloating,
+      },
       {
         id: "capture",
         label: "Capture clipboard",
@@ -136,13 +173,25 @@ export function CommandPalette({
         }
       }
     return [
-      ...commands.filter(
-        (c) =>
-          !!state &&
-          (state.shelves.length > 0 ||
-            ["create", "settings", "undo"].includes(c.id)) &&
-          (!q || c.label.toLowerCase().includes(q)),
-      ),
+      ...commands
+        .filter(
+          (c) =>
+            !!state &&
+            (state.shelves.length > 0 ||
+              [
+                "create",
+                "settings",
+                "undo",
+                "file-actions",
+                "destinations",
+                "reopen-floating",
+              ].includes(c.id)) &&
+            (!q || `${c.label} ${c.detail || ""}`.toLowerCase().includes(q)),
+        )
+        .map((command) => ({
+          ...command,
+          disabled: !!busy || status !== "connected",
+        })),
       ...shelves,
       ...items,
     ];
@@ -151,6 +200,8 @@ export function CommandPalette({
     state?.shelves,
     state?.items,
     state?.canUndo,
+    busy,
+    status,
     actions,
     onShelf,
     onSelectItem,
@@ -164,6 +215,7 @@ export function CommandPalette({
       ?.scrollIntoView({ block: "nearest" });
   }, [index]);
   const activate = (entry: Entry) => {
+    if (entry.disabled) return;
     onClose();
     entry.action();
   };
@@ -215,6 +267,8 @@ export function CommandPalette({
               id={`command-${i}`}
               role="option"
               aria-selected={i === index}
+              aria-disabled={entry.disabled}
+              disabled={entry.disabled}
               tabIndex={-1}
               className={cn("command-row", i === index && "active")}
               key={entry.id}

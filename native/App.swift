@@ -183,7 +183,7 @@ final class RelayInstance {
 
 @MainActor
 final class RelayAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
-  WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler
+  WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler, NSMenuItemValidation
 {
   let store: ShelfStore
   var window: NSWindow!
@@ -193,6 +193,7 @@ final class RelayAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
   private let initialRequest: RelayLaunchRequest
   private var statusItem: NSStatusItem?
   private var dragController: DragController!
+  private var capturingScreenshot = false
   private var resourceHandler: RelayResourceHandler!
   private var hotKeys: RelayHotKeys?
   private var rendererReady = false
@@ -333,6 +334,8 @@ final class RelayAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
     main.addItem(appItem)
     addMenuItem("Open Relay Shelf", to: appMenu, action: #selector(openFromMenu))
     addMenuItem("Add Clipboard", to: appMenu, action: #selector(addClipboard))
+    addMenuItem("Capture Screenshot…", to: appMenu, action: #selector(captureScreenshot))
+    addMenuItem("Reopen Last Floating Shelf", to: appMenu, action: #selector(reopenFloatingShelf))
     addMenuItem("New Shelf…", to: appMenu, action: #selector(newShelf), key: "n")
     appMenu.addItem(.separator())
     addMenuItem("Hide Relay Shelf", to: appMenu, action: #selector(hideWindow), key: "h")
@@ -362,6 +365,8 @@ final class RelayAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
     let menu = NSMenu(title: "Relay Shelf")
     addMenuItem("Open Relay Shelf", to: menu, action: #selector(openFromMenu))
     addMenuItem("Add Clipboard", to: menu, action: #selector(addClipboard))
+    addMenuItem("Capture Screenshot…", to: menu, action: #selector(captureScreenshot))
+    addMenuItem("Reopen Last Floating Shelf", to: menu, action: #selector(reopenFloatingShelf))
     addMenuItem("New Shelf…", to: menu, action: #selector(newShelf))
     menu.addItem(.separator())
     addMenuItem("Quit Relay Shelf", to: menu, action: #selector(quit), key: "q")
@@ -374,6 +379,13 @@ final class RelayAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
     item.target = self
   }
 
+  func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+    if menuItem.action == #selector(reopenFloatingShelf) {
+      return dragController?.canReopenFloatingShelf == true
+    }
+    return true
+  }
+
   func showWindow() {
     guard let window else { return }
     if window.isMiniaturized { window.deminiaturize(nil) }
@@ -384,6 +396,40 @@ final class RelayAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
   @objc private func openFromMenu() { showWindow() }
   @objc private func hideWindow() { window?.orderOut(nil) }
   @objc private func quit() { NSApp.terminate(nil) }
+
+  @objc private func reopenFloatingShelf() {
+    do { try dragController.reopenFloatingShelf() } catch { showNotice(error.localizedDescription) }
+  }
+
+  @objc private func captureScreenshot() {
+    Task {
+      do {
+        _ = try await runScreenshot(payload: [:])
+      } catch {
+        showWindow()
+        showNotice(error.localizedDescription)
+      }
+    }
+  }
+
+  private func runScreenshot(payload: [String: Any]) async throws -> Any {
+    guard !capturingScreenshot else {
+      throw RelayFailure(message: "Finish or cancel the current screenshot selection first.")
+    }
+    capturingScreenshot = true
+    let wasVisible = window?.isVisible == true
+    window?.orderOut(nil)
+    dragController.setCapturePresentationHidden(true)
+    defer {
+      capturingScreenshot = false
+      dragController.setCapturePresentationHidden(false)
+      if wasVisible { showWindow() }
+    }
+    let result = try await store.handle("captureScreenshot", payload: payload)
+    if let state = result as? [String: Any], let captured = state["capturedIDs"] as? [String],
+      !captured.isEmpty { showWindow() }
+    return result
+  }
 
   @objc private func addClipboard() {
     showWindow()
@@ -543,7 +589,19 @@ final class RelayAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
     Task {
       defer { inFlightCommands.remove(identifier) }
       do {
-        let result = try await store.handle(command, payload: payload)
+        let result: Any
+        switch command {
+        case "showFloatingShelf":
+          try dragController.showFloatingShelf(ids: payload["ids"] as? [String] ?? [])
+          result = NSNull()
+        case "reopenFloatingShelf":
+          try dragController.reopenFloatingShelf()
+          result = NSNull()
+        case "captureScreenshot":
+          result = try await runScreenshot(payload: payload)
+        default:
+          result = try await store.handle(command, payload: payload)
+        }
         let value: Any = result is Void ? NSNull() : result
         send(["kind": "reply", "id": identifier, "value": value])
       } catch {

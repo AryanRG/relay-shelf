@@ -13,11 +13,15 @@ final class DragController: NSObject {
   var onItemClick: ((String, NSEvent) -> Void)?
   var isReceivingExternalDrag: Bool { externalDrag && !nativeDrag && NSEvent.pressedMouseButtons & 1 != 0 }
   let floatingShelf = FloatingShelfLifecycle()
+  private let floatingHistoryURL: URL
+  private var lastFloatingShelfIDs: [String] = []
+  private var persistedFloatingShelfIDs: [String] = []
   private var idleTimer: Timer?
   private var outgoingFromFloatingShelf = false
   private var panel: NSPanel?
   private var globalMonitor: Any?
   private var localMonitor: Any?
+  private var screenObserver: NSObjectProtocol?
   private var lastMouseEvent: NSEvent?
   private var preparedDragIDs: [String] = []
   private var dragOrigin: NSPoint?
@@ -45,15 +49,31 @@ final class DragController: NSObject {
     store: ShelfStore, root: URL, reveal: @escaping () -> Void, notice: @escaping (String) -> Void
   ) {
     self.store = store
+    floatingHistoryURL = store.root.appendingPathComponent("floating-shelf.json")
     incomingRoot = root.appendingPathComponent("Files/Promises", isDirectory: true)
     self.reveal = reveal
     self.notice = notice
     super.init()
+    if let history = Self.readFloatingHistory(floatingHistoryURL) {
+      lastFloatingShelfIDs = committedFloatingIDs(history.ids)
+      persistedFloatingShelfIDs = history.ids
+    }
+    floatingShelf.onChange = { [weak self] in
+      self?.floatingShelfChanged()
+    }
+    screenObserver = NotificationCenter.default.addObserver(
+      forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main
+    ) { [weak self] _ in
+      MainActor.assumeIsolated {
+        guard let self, self.floatingShelf.isVisible else { return }
+        if self.floatingShelf.dockEdge == nil { self.positionPanel(near: NSEvent.mouseLocation) }
+        self.refreshFloatingShelf()
+      }
+    }
   }
 
   func attach(to webView: RelayWebView) {
     self.webView = webView
-    floatingShelf.onChange = { [weak self] in self?.refreshFloatingShelf() }
     webView.dragController = self
     webView.registerForDraggedTypes(Self.pasteboardTypes)
     let overlay = NativeDragOverlay(frame: webView.bounds)
@@ -69,6 +89,7 @@ final class DragController: NSObject {
       self?.observeLocal(event)
       return event
     }
+    refreshFloatingShelf()
   }
 
   func update(settings: [String: Any]) {
@@ -94,6 +115,8 @@ final class DragController: NSObject {
     if let monitor = localMonitor { NSEvent.removeMonitor(monitor) }
     globalMonitor = nil
     localMonitor = nil
+    if let screenObserver { NotificationCenter.default.removeObserver(screenObserver) }
+    screenObserver = nil
     floatingShelf.dismiss()
     idleTimer?.invalidate()
     lastMouseEvent = nil
@@ -222,7 +245,7 @@ final class DragController: NSObject {
   private func ensurePanel() {
     if panel == nil {
       let target = NSPanel(
-        contentRect: NSRect(x: 0, y: 0, width: 270, height: 148),
+        contentRect: NSRect(x: 0, y: 0, width: 320, height: 206),
         styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
       target.isFloatingPanel = true
       target.becomesKeyOnlyIfNeeded = true
@@ -233,7 +256,7 @@ final class DragController: NSObject {
       target.isOpaque = false
       target.backgroundColor = .clear
       target.hasShadow = true
-      let view = ShelfDropView(frame: NSRect(x: 0, y: 0, width: 270, height: 148))
+      let view = ShelfDropView(frame: NSRect(x: 0, y: 0, width: 320, height: 206))
       view.controller = self
       target.contentView = view
       panel = target
@@ -257,9 +280,17 @@ final class DragController: NSObject {
   private func refreshFloatingShelf() {
     idleTimer?.invalidate()
     idleTimer = nil
-    guard floatingShelf.isVisible else { panel?.orderOut(nil); return }
+    guard floatingShelf.isVisible && !floatingShelf.isCapturePresentationHidden else {
+      panel?.orderOut(nil)
+      return
+    }
+    // Import/history logic also runs without a web view (e.g. before attachment).
+    guard webView != nil else { return }
     ensurePanel()
-    if panel?.isVisible != true { positionPanel(near: NSEvent.mouseLocation) }
+    if let edge = floatingShelf.dockEdge, let panel {
+      panel.setFrame(Self.dockedFrame(panel.frame, edge: edge,
+        visibleFrames: NSScreen.screens.map(\.visibleFrame)), display: true)
+    } else if panel?.isVisible != true { positionPanel(near: NSEvent.mouseLocation) }
     let ids = floatingShelf.itemIDs
     let items = store.snapshot()["items"] as? [[String: Any]] ?? []
     let name = ids.first.flatMap { id in
@@ -267,7 +298,7 @@ final class DragController: NSObject {
     }
     (panel?.contentView as? ShelfDropView)?.update(
       ids: ids, name: name, pending: floatingShelf.pendingCount,
-      failed: floatingShelf.importFailed)
+      failed: floatingShelf.importFailed, dockEdge: floatingShelf.dockEdge)
     panel?.orderFrontRegardless()
     if let deadline = floatingShelf.deadline {
       let timer = Timer(timeInterval: max(0.01, deadline - ProcessInfo.processInfo.systemUptime),
@@ -281,6 +312,100 @@ final class DragController: NSObject {
 
   func openShelf() { reveal() }
   func closeFloatingShelf() { floatingShelf.dismiss() }
+
+  /// Hide for screen capture without dismissing retained items or import tokens.
+  /// The caller must explicitly restore presentation, including after failure/cancellation.
+  func setCapturePresentationHidden(_ hidden: Bool) {
+    floatingShelf.setCapturePresentationHidden(hidden)
+  }
+
+  var canReopenFloatingShelf: Bool { !committedFloatingIDs(lastFloatingShelfIDs).isEmpty }
+
+  /// IDs refer to existing store items; this never imports, moves or deletes membership.
+  func showFloatingShelf(ids: [String]) throws {
+    guard !nativeDrag else {
+      throw RelayFailure(message: "Finish the current drag before opening a floating shelf.")
+    }
+    let retained = committedFloatingIDs(ids)
+    guard !retained.isEmpty else {
+      throw RelayFailure(message: "No saved items remain for this floating shelf.")
+    }
+    try saveFloatingHistory(retained)
+    lastFloatingShelfIDs = retained
+    floatingShelf.showRetained(ids: retained)
+  }
+
+  func reopenFloatingShelf() throws {
+    try showFloatingShelf(ids: lastFloatingShelfIDs)
+  }
+
+  /// Passing "none" undocks; controls also use this entry point.
+  func dockFloatingShelf(edge: String) {
+    guard edge == "none" || FloatingShelfLifecycle.DockEdge(rawValue: edge) != nil else { return }
+    floatingShelf.setDocked(FloatingShelfLifecycle.DockEdge(rawValue: edge))
+  }
+
+  // Screen coordinates can be negative and screens can be separated by gaps.
+  // Choose the nearest visible frame, then clamp both axes inside that screen.
+  static func dockedFrame(_ frame: NSRect, edge: FloatingShelfLifecycle.DockEdge,
+                          visibleFrames: [NSRect]) -> NSRect {
+    let center = NSPoint(x: frame.midX, y: frame.midY)
+    func distance(_ rect: NSRect) -> CGFloat {
+      let dx = max(rect.minX - center.x, 0, center.x - rect.maxX)
+      let dy = max(rect.minY - center.y, 0, center.y - rect.maxY)
+      return dx * dx + dy * dy
+    }
+    guard let screen = visibleFrames.filter({ $0.width > 16 && $0.height > 16 })
+      .min(by: { distance($0) < distance($1) }) else { return frame }
+    let visible = screen.insetBy(dx: 8, dy: 8)
+    let size = NSSize(width: min(frame.width, visible.width),
+                      height: min(frame.height, visible.height))
+    return NSRect(x: edge == .left ? visible.minX : visible.maxX - size.width,
+      y: max(visible.minY, min(frame.minY, visible.maxY - size.height)),
+      width: size.width, height: size.height)
+  }
+
+  private func committedFloatingIDs(_ ids: [String]) -> [String] {
+    let snapshot = store.snapshot()
+    let shelves = Set((snapshot["shelves"] as? [[String: Any]] ?? []).compactMap { $0["id"] as? String })
+    let available = Set((snapshot["items"] as? [[String: Any]] ?? []).compactMap { item -> String? in
+      guard let shelf = item["shelfId"] as? String, shelves.contains(shelf) else { return nil }
+      return item["id"] as? String
+    })
+    var seen = Set<String>()
+    var retained: [String] = []
+    for id in ids where available.contains(id) && seen.insert(id).inserted {
+      retained.append(id)
+      if retained.count == FloatingShelfLifecycle.maximumItems { break }
+    }
+    return retained
+  }
+
+  private func saveFloatingHistory(_ ids: [String]) throws {
+    guard ids != persistedFloatingShelfIDs else { return }
+    try JSONEncoder().encode(FloatingShelfHistory(ids: ids))
+      .write(to: floatingHistoryURL, options: .atomic)
+    persistedFloatingShelfIDs = ids
+  }
+
+  private static func readFloatingHistory(_ url: URL) -> FloatingShelfHistory? {
+    guard let file = try? FileHandle(forReadingFrom: url) else { return nil }
+    defer { try? file.close() }
+    guard let data = try? file.read(upToCount: 128 * 1024 + 1), data.count <= 128 * 1024,
+      let history = try? JSONDecoder().decode(FloatingShelfHistory.self, from: data),
+      history.version == 1 else { return nil }
+    return history
+  }
+
+  private func floatingShelfChanged() {
+    let ids = committedFloatingIDs(floatingShelf.itemIDs)
+    if !ids.isEmpty {
+      lastFloatingShelfIDs = ids
+      do { try saveFloatingHistory(ids) }
+      catch { notice("Could not save floating shelf history. \(error.localizedDescription)") }
+    }
+    refreshFloatingShelf()
+  }
 
   func resetExternalDrag() {
     externalDrag = false
@@ -496,6 +621,11 @@ final class DragController: NSObject {
     dragOrigin = nil
     resetExternalDrag()
   }
+}
+
+private struct FloatingShelfHistory: Codable {
+  var version = 1
+  let ids: [String]
 }
 
 @MainActor

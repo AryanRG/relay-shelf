@@ -16,6 +16,7 @@ import {
   ChevronDown,
   Clipboard,
   ClipboardPaste,
+  Camera,
   Command,
   Copy,
   Ellipsis,
@@ -30,17 +31,20 @@ import {
   Loader2,
   PanelLeft,
   PanelRight,
+  PanelsTopLeft,
   Pin,
   Plus,
   Search,
   Settings2,
+  WandSparkles,
   Trash2,
   Undo2,
   WifiOff,
   X,
 } from "lucide-react";
 import { Toaster, toast } from "sonner";
-import type { Shelf, ShelfItem } from "@/shared";
+import type { Shelf, ShelfItem, ShelfState } from "@/shared";
+import type { FileActionsTab } from "@/components/FileActionsDialog";
 import { useBridge } from "@/lib/bridge";
 import { bytes, cn, isEditing, safeUrl } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -78,6 +82,11 @@ const CommandPalette = lazy(() =>
     default: m.CommandPalette,
   })),
 );
+const FileActionsDialog = lazy(() =>
+  import("@/components/FileActionsDialog").then((m) => ({
+    default: m.FileActionsDialog,
+  })),
+);
 type ShelfDialog =
   { mode: "create" } | { mode: "rename" | "delete" | "clear"; shelf: Shelf };
 function remember(key: string, value: string) {
@@ -112,6 +121,12 @@ export default function App() {
     "general",
   );
   const [palette, setPalette] = useState(false);
+  const [fileActions, setFileActions] = useState<{
+    items: ShelfItem[];
+    shelfId: string;
+    tab?: FileActionsTab;
+  } | null>(null);
+  const nativeActionLock = useRef(false);
   const [shelfDialog, setShelfDialog] = useState<ShelfDialog | null>(null);
   const anchor = useRef<string | null>(null);
   const searchInput = useRef<HTMLInputElement>(null);
@@ -120,7 +135,11 @@ export default function App() {
   const shelfId = shelf?.id || "";
   const all = active === "all";
   const connected = status === "connected";
-  const modal = !!paste || settings || palette || !!shelfDialog;
+  const modal =
+    !!paste || settings || palette || !!shelfDialog || !!fileActions;
+  useEffect(() => {
+    if (modal) window.relay?.setDragRegions([]);
+  }, [modal]);
   useEffect(() => {
     if (
       state &&
@@ -280,6 +299,57 @@ export default function App() {
   const undo = useCallback(() => {
     void perform("undo");
   }, [perform]);
+  const openFileActions = useCallback(
+    (tab?: FileActionsTab) => {
+      setFileActions({ items: selectedItems, shelfId, tab });
+    },
+    [selectedItems, shelfId],
+  );
+  const screenshot = useCallback(async () => {
+    if (!shelfId || !connected || busy || nativeActionLock.current) return;
+    nativeActionLock.current = true;
+    try {
+      const next = await perform<ShelfState>("captureScreenshot", { shelfId });
+      const captured = new Set(next?.capturedIDs || []);
+      const outputs =
+        next?.items.filter(
+          (item) => item.shelfId === shelfId && captured.has(item.id),
+        ) || [];
+      if (outputs.length) {
+        setActive(shelfId);
+        setQuery("");
+        setFilter("all");
+        setSelected(new Set(outputs.map((item) => item.id)));
+        setPreviewVisible(true);
+        toast.success("Screenshot added", {
+          description: "Use File actions → Text / OCR to extract text.",
+        });
+      }
+    } finally {
+      nativeActionLock.current = false;
+    }
+  }, [shelfId, connected, busy, state?.items, perform]);
+  const floatingShelf = useCallback(
+    async (ids?: string[]) => {
+      if (
+        !connected ||
+        busy ||
+        nativeActionLock.current ||
+        (ids && !ids.length)
+      )
+        return;
+      nativeActionLock.current = true;
+      try {
+        await perform<null>(
+          ids ? "showFloatingShelf" : "reopenFloatingShelf",
+          ids ? { ids } : undefined,
+        );
+      } finally {
+        nativeActionLock.current = false;
+      }
+    },
+    [connected, busy, perform],
+  );
   const actions = useMemo(
     () => ({
       paste: () => setPaste({ text: "" }),
@@ -288,8 +358,12 @@ export default function App() {
       settings: () => setSettings(true),
       create: () => setShelfDialog({ mode: "create" }),
       undo,
+      screenshot: () => void screenshot(),
+      fileActions: () => openFileActions(),
+      destinations: () => openFileActions("destinations"),
+      reopenFloating: () => void floatingShelf(),
     }),
-    [capture, addFiles, undo],
+    [capture, addFiles, undo, screenshot, openFileActions, floatingShelf],
   );
   const findItem = useCallback((next: ShelfItem) => {
     setActive(next.shelfId);
@@ -301,12 +375,15 @@ export default function App() {
   // Native menu / global shortcut capture uses the currently visible destination shelf.
   useEffect(() => {
     if (!connected || !window.relay) return;
-    return window.relay.onCapture(capture);
-  }, [connected, capture]);
+    return window.relay.onCapture(() => {
+      if (!modal && !busy) capture();
+    });
+  }, [connected, capture, modal, busy]);
   useEffect(() => {
     function keydown(e: KeyboardEvent) {
       const mod = e.metaKey || e.ctrlKey;
       if (mod && e.key.toLowerCase() === "k") {
+        if (modal && !palette) return;
         e.preventDefault();
         setPalette((v) => !v);
         return;
@@ -367,6 +444,7 @@ export default function App() {
     return () => window.removeEventListener("keydown", keydown);
   }, [
     modal,
+    palette,
     connected,
     busy,
     capture,
@@ -398,7 +476,7 @@ export default function App() {
   }
   async function dropped(event: React.DragEvent) {
     event.preventDefault();
-    if (!connected || !shelfId || busy) return;
+    if (!connected || !shelfId || busy || modal) return;
     // Files dropped on the native overlay are handled by AppKit. Browser fallback uses the injected path helper.
     const paths = Array.from(event.dataTransfer.files)
       .map((file) => window.relay?.filePath(file))
@@ -498,6 +576,13 @@ export default function App() {
             Relay Shelf
           </span>
           <div className="window-toolbar">
+            <IconButton
+              label="Reopen floating shelf"
+              disabled={!connected || !!busy}
+              onClick={() => void floatingShelf()}
+            >
+              <PanelsTopLeft size={14} />
+            </IconButton>
             <IconButton
               label={
                 state?.settings.alwaysOnTop
@@ -666,6 +751,10 @@ export default function App() {
                       <Clipboard />
                       Capture clipboard<span className="menu-shortcut">⌘V</span>
                     </DropdownMenuItem>
+                    <DropdownMenuItem onSelect={() => void screenshot()}>
+                      <Camera />
+                      Capture screenshot…
+                    </DropdownMenuItem>
                     <DropdownMenuSeparator />
                     <DropdownMenuItem
                       onSelect={() => setShelfDialog({ mode: "create" })}
@@ -825,6 +914,14 @@ export default function App() {
                     </span>
                   ) : selected.size > 0 ? (
                     <>
+                      <Button
+                        size="xs"
+                        variant="outline"
+                        onClick={() => openFileActions()}
+                      >
+                        <WandSparkles size={14} />
+                        File actions
+                      </Button>
                       <IconButton
                         label="Copy selected files"
                         onClick={() =>
@@ -872,6 +969,39 @@ export default function App() {
                           ? `${selected.size} selected`
                           : "Shelf actions"}
                       </DropdownMenuLabel>
+                      <DropdownMenuItem
+                        onSelect={() => openFileActions()}
+                        disabled={!!busy}
+                      >
+                        <WandSparkles />
+                        File actions…
+                      </DropdownMenuItem>
+                      <DropdownMenuItem
+                        onSelect={() => openFileActions("destinations")}
+                        disabled={!!busy}
+                      >
+                        <FolderOpen />
+                        Saved destinations…
+                      </DropdownMenuItem>
+                      <DropdownMenuItem
+                        onSelect={() => void floatingShelf(selectedIds)}
+                        disabled={
+                          !selectedIds.length ||
+                          selectedItems.some((item) => !item.exists) ||
+                          !!busy
+                        }
+                      >
+                        <PanelsTopLeft />
+                        Show selected in floating shelf
+                      </DropdownMenuItem>
+                      <DropdownMenuItem
+                        onSelect={() => void floatingShelf()}
+                        disabled={!!busy}
+                      >
+                        <PanelsTopLeft />
+                        Reopen floating shelf
+                      </DropdownMenuItem>
+                      <DropdownMenuSeparator />
                       <DropdownMenuItem
                         onSelect={() => void exportZip()}
                         disabled={!items.length}
@@ -1136,6 +1266,11 @@ export default function App() {
             <SettingsDialog
               shelfId={shelfId}
               initialTab={settingsTab}
+              onDestinations={() => {
+                setSettings(false);
+                setSettingsTab("general");
+                openFileActions("destinations");
+              }}
               onClose={() => {
                 setSettings(false);
                 setSettingsTab("general");
@@ -1148,6 +1283,14 @@ export default function App() {
               onSelectItem={findItem}
               onShelf={chooseShelf}
               actions={actions}
+            />
+          )}
+          {fileActions && state && (
+            <FileActionsDialog
+              items={fileActions.items}
+              shelfId={fileActions.shelfId}
+              initialTab={fileActions.tab}
+              onClose={() => setFileActions(null)}
             />
           )}
         </Suspense>

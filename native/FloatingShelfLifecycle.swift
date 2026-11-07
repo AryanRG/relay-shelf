@@ -3,6 +3,8 @@ import Foundation
 /// Presentation state is independent of mouse tracking and of persisted shelf contents.
 @MainActor
 final class FloatingShelfLifecycle {
+  enum DockEdge: String { case left, right }
+  static let maximumItems = 500
   static let idleTimeout: TimeInterval = 60
   private let now: () -> TimeInterval
   private var batches: [(token: UUID, ids: [String], pending: Bool)] = []
@@ -11,6 +13,9 @@ final class FloatingShelfLifecycle {
   private var outgoing = false
   private var acceptedDrop = false
   private(set) var isVisible = false
+  // A capture pause belongs to presentation, so dismissal/new drops do not clear it.
+  private(set) var isCapturePresentationHidden = false
+  private(set) var dockEdge: DockEdge?
   private(set) var deadline: TimeInterval?
   var onChange: (() -> Void)?
 
@@ -20,13 +25,38 @@ final class FloatingShelfLifecycle {
 
   var itemIDs: [String] {
     var seen = Set<String>()
-    return batches.flatMap(\.ids).filter { seen.insert($0).inserted }
+    return Array(batches.flatMap(\.ids).filter { seen.insert($0).inserted }.prefix(Self.maximumItems))
   }
   var pendingCount: Int { batches.filter(\.pending).count }
   var importFailed: Bool { acceptedDrop && pendingCount == 0 && itemIDs.isEmpty }
 
   func showTarget() {
     isVisible = true
+    rearm()
+  }
+
+  /// Replace presentation only. Old import tokens must not enter a reopened shelf.
+  func showRetained(ids: [String]) {
+    batches = [(UUID(), Array(ids.prefix(Self.maximumItems)), false)]
+    isVisible = true
+    acceptedDrop = true
+    hovered = false
+    incoming = false
+    outgoing = false
+    rearm()
+  }
+
+  func setDocked(_ edge: DockEdge?) {
+    guard isVisible, dockEdge != edge else { return }
+    dockEdge = edge
+    rearm()
+  }
+
+  func setCapturePresentationHidden(_ hidden: Bool) {
+    guard isCapturePresentationHidden != hidden else { return }
+    isCapturePresentationHidden = hidden
+    // Ordering the panel out may not deliver mouseExited. Resume with fresh hover tracking.
+    hovered = false
     rearm()
   }
 
@@ -53,10 +83,11 @@ final class FloatingShelfLifecycle {
   func resetExternalDrag() {
     let wasIncoming = incoming
     incoming = false
-    if !acceptedDrop { dismiss() } else if wasIncoming { rearm() }
+    if !acceptedDrop && dockEdge == nil { dismiss() } else if wasIncoming { rearm() }
   }
 
   func setHovered(_ value: Bool) {
+    guard !isCapturePresentationHidden || !value else { return }
     guard hovered != value else { return }
     hovered = value
     rearm()
@@ -75,6 +106,7 @@ final class FloatingShelfLifecycle {
 
   func dismiss() {
     isVisible = false
+    dockEdge = nil
     batches.removeAll()
     acceptedDrop = false
     hovered = false
@@ -91,7 +123,8 @@ final class FloatingShelfLifecycle {
   }
 
   private func rearm() {
-    deadline = isVisible && !hovered && !incoming && !outgoing && pendingCount == 0
+    deadline = isVisible && !isCapturePresentationHidden && dockEdge == nil
+      && !hovered && !incoming && !outgoing && pendingCount == 0
       ? now() + Self.idleTimeout : nil
     onChange?()
   }

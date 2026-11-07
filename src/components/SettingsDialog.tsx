@@ -28,12 +28,14 @@ export function SettingsDialog({
   shelfId,
   initialTab = "general",
   onClose,
+  onDestinations,
 }: {
   shelfId: string;
   initialTab?: "general" | "watches";
   onClose: () => void;
+  onDestinations: () => void;
 }) {
-  const { state, perform } = useBridge();
+  const { state, perform, busy } = useBridge();
   const [draft, setDraft] = useState<Settings>(state!.settings);
   const [watchShelf, setWatchShelf] = useState(shelfId);
   const [saving, setSaving] = useState(false);
@@ -169,6 +171,21 @@ export function SettingsDialog({
             </div>
             <div className="settings-section">
               <h3>Files & paths</h3>
+              <div className="setting-row">
+                <span>
+                  <strong>Saved destinations</strong>
+                  <small>Keep folders ready for copying selected files.</small>
+                </span>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  disabled={saving || watchBusy || !!busy}
+                  onClick={onDestinations}
+                >
+                  Manage ({state?.destinations.length || 0})
+                </Button>
+              </div>
               <label className="setting-row" htmlFor="storage">
                 <span>
                   <strong>Default storage</strong>

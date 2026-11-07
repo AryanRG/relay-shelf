@@ -54,6 +54,12 @@ struct WatchRecord: Codable {
   var enabled: Bool
 }
 
+struct SavedDestination: Codable {
+  var id: String
+  var name: String
+  var path: String
+}
+
 struct RelaySettings: Codable {
   var theme = "system"
   var activation = "shake"
@@ -70,6 +76,23 @@ struct PersistedShelf: Codable {
   var items: [ItemRecord] = []
   var watchedFolders: [WatchRecord] = []
   var settings = RelaySettings()
+  var destinations: [SavedDestination] = []
+}
+
+extension PersistedShelf {
+  private enum CodingKeys: String, CodingKey {
+    case version, shelves, items, watchedFolders, settings, destinations
+  }
+
+  init(from decoder: Decoder) throws {
+    let values = try decoder.container(keyedBy: CodingKeys.self)
+    version = try values.decode(Int.self, forKey: .version)
+    shelves = try values.decode([ShelfRecord].self, forKey: .shelves)
+    items = try values.decodeIfPresent([ItemRecord].self, forKey: .items) ?? []
+    watchedFolders = try values.decodeIfPresent([WatchRecord].self, forKey: .watchedFolders) ?? []
+    settings = try values.decodeIfPresent(RelaySettings.self, forKey: .settings) ?? RelaySettings()
+    destinations = try values.decodeIfPresent([SavedDestination].self, forKey: .destinations) ?? []
+  }
 }
 
 @MainActor
@@ -81,9 +104,10 @@ final class ShelfStore {
   private var allowedPaths = Set<String>()
   private var resources: [String: URL] = [:]
   private var watchers: [String: DirectoryWatcher] = [:]
-  private var protectedDirectories = Set<String>()
+  private var protectedDirectories: [String: Int] = [:]
   private var cleanupTask: Task<Void, Never>?
   private var activeReads = 0
+  private var processingFiles = false
   var onChange: (([String: Any]) -> Void)?
   var onNotice: ((String) -> Void)?
   var onSettingsChange: (() -> Void)?
@@ -127,17 +151,21 @@ final class ShelfStore {
   }
 
   func protectManagedDirectory(_ url: URL) {
-    protectedDirectories.insert(url.standardizedFileURL.resolvingSymlinksInPath().path)
+    let path = url.standardizedFileURL.resolvingSymlinksInPath().path
+    protectedDirectories[path, default: 0] += 1
   }
 
   func releaseManagedDirectory(_ url: URL) {
-    protectedDirectories.remove(url.standardizedFileURL.resolvingSymlinksInPath().path)
+    let path = url.standardizedFileURL.resolvingSymlinksInPath().path
+    let count = protectedDirectories[path, default: 0]
+    if count > 1 { protectedDirectories[path] = count - 1 }
+    else { protectedDirectories.removeValue(forKey: path) }
     scheduleCleanup()
   }
 
   private func releaseStaging(_ items: [ItemRecord]) {
     for item in items where item.storage == "copy" {
-      protectedDirectories.remove(URL(fileURLWithPath: item.path).deletingLastPathComponent().path)
+      releaseManagedDirectory(URL(fileURLWithPath: item.path).deletingLastPathComponent())
     }
     scheduleCleanup()
   }
@@ -162,7 +190,9 @@ final class ShelfStore {
           ?? []
         for directory in directories where UUID(uuidString: directory.lastPathComponent) != nil {
           let directoryKey = directory.standardizedFileURL.resolvingSymlinksInPath().path
-          guard !self.protectedDirectories.contains(directoryKey),
+          guard !self.protectedDirectories.keys.contains(where: {
+            $0 == directoryKey || $0.hasPrefix(directoryKey + "/")
+          }),
             !retained.contains(where: { $0 == directoryKey || $0.hasPrefix(directoryKey + "/") }
             )
           else { continue }
@@ -309,6 +339,54 @@ final class ShelfStore {
         payload["text"] as? String ?? "", name: payload["name"] as? String,
         shelfId: try shelfID(payload))
     case "captureClipboard": try await captureClipboard(shelfId: try shelfID(payload))
+    case "addDestination": try addDestination(payload)
+    case "removeDestination":
+      let id = payload["id"] as? String ?? ""
+      try commit { $0.destinations.removeAll { $0.id == id } }
+    case "copyToDestination":
+      let items = try orderedSelection(payload)
+      guard let destination = state.destinations.first(where: {
+        $0.id == payload["destinationId"] as? String
+      }) else { throw RelayFailure(message: "Choose a saved destination first.") }
+      let urls = items.map { URL(fileURLWithPath: $0.path) }
+      let directory = try destinationFolder(destination.path)
+      let paths = try await withProtectedInputs(urls) {
+        try await DestinationCopier.copy(urls, to: directory)
+      }
+      return ["paths": paths.map(\.path)]
+    case "processFiles":
+      let items = try orderedSelection(payload)
+      let destination = try shelfID(payload)
+      let operation = payload["operation"] as? String ?? ""
+      let options = payload["options"] as? [String: Any] ?? [:]
+      let urls = items.map { URL(fileURLWithPath: $0.path) }
+      _ = try await withProtectedInputs(urls) {
+        try await generateFiles(shelfId: destination) { directory in
+          try await FileActions.execute(
+            operation: operation, urls: urls, outputDirectory: directory, options: options)
+        }
+      }
+    case "captureScreenshot":
+      let captured = try await generateFiles(shelfId: try shelfID(payload)) { directory in
+        try await SystemActions.captureScreenshot(outputDirectory: directory)
+      }
+      var result = snapshot()
+      result["capturedIDs"] = captured
+      return result
+    case "listShortcuts": return try await SystemActions.listShortcuts()
+    case "runShortcut":
+      let items = try orderedSelection(payload)
+      let destination = try shelfID(payload)
+      let name = payload["name"] as? String ?? ""
+      guard !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+        throw RelayFailure(message: "Choose a shortcut to run.")
+      }
+      let urls = items.map { URL(fileURLWithPath: $0.path) }
+      _ = try await withProtectedInputs(urls) {
+        try await generateFiles(shelfId: destination) { directory in
+          try await SystemActions.runShortcut(name: name, urls: urls, outputDirectory: directory)
+        }
+      }
     case "chooseFiles":
       let panel = NSOpenPanel()
       panel.canChooseFiles = true
@@ -503,6 +581,98 @@ final class ShelfStore {
     return name
   }
 
+  private func orderedSelection(_ payload: [String: Any]) throws -> [ItemRecord] {
+    let ids = payload["ids"] as? [String] ?? []
+    guard !ids.isEmpty, ids.count <= 500 else {
+      throw RelayFailure(message: "Select between 1 and 500 available items.")
+    }
+    let byID = Dictionary(uniqueKeysWithValues: state.items.map { ($0.id, $0) })
+    var seen = Set<String>()
+    return try ids.filter { seen.insert($0).inserted }.map { id in
+      guard let item = byID[id], FileManager.default.fileExists(atPath: item.path) else {
+        throw RelayFailure(message: "A selected file is unavailable. Refresh the shelf or use Locate.")
+      }
+      return item
+    }
+  }
+
+  private func destinationFolder(_ input: String) throws -> URL {
+    let path = (input as NSString).expandingTildeInPath
+    guard (path as NSString).isAbsolutePath else {
+      throw RelayFailure(message: "Choose an existing destination folder.")
+    }
+    let url = URL(fileURLWithPath: path).standardizedFileURL.resolvingSymlinksInPath()
+    let description = PathResolver.describe(url)
+    guard description["exists"] as? Bool == true, description["kind"] as? String == "folder" else {
+      throw RelayFailure(message: "Choose an existing destination folder.")
+    }
+    guard url.path != root.path, !url.path.hasPrefix(root.path + "/") else {
+      throw RelayFailure(message: "Choose a destination outside Relay Shelf’s managed data folder.")
+    }
+    return url
+  }
+
+  private func addDestination(_ payload: [String: Any]) throws {
+    let url = try destinationFolder(payload["path"] as? String ?? "")
+    let suppliedName = (payload["name"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+    let name = try validName(suppliedName.isEmpty ? url.lastPathComponent : suppliedName)
+    if let index = state.destinations.firstIndex(where: { $0.path == url.path }) {
+      try commit { $0.destinations[index].name = name }
+      return
+    }
+    guard state.destinations.count < 100 else {
+      throw RelayFailure(message: "Keep up to 100 saved destinations.")
+    }
+    let record = SavedDestination(id: UUID().uuidString, name: name, path: url.path)
+    try commit { $0.destinations.append(record) }
+  }
+
+  private func withProtectedInputs<Value>(
+    _ urls: [URL], operation: () async throws -> Value
+  ) async rethrows -> Value {
+    for url in urls { protectManagedDirectory(url) }
+    defer { for url in urls { releaseManagedDirectory(url) } }
+    return try await operation()
+  }
+
+  @discardableResult
+  private func generateFiles(
+    shelfId: String, operation: (URL) async throws -> [URL]
+  ) async throws -> [String] {
+    guard !processingFiles else {
+      throw RelayFailure(message: "Wait for the current file action to finish.")
+    }
+    processingFiles = true
+    defer { processingFiles = false }
+    let directory = root.appendingPathComponent("Files").appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    protectManagedDirectory(directory)
+    defer { releaseManagedDirectory(directory) }
+    let urls = try await operation(directory)
+    try Task.checkCancellation()
+    guard urls.count <= 500 else {
+      throw RelayFailure(message: "A file action can add up to 500 output files.")
+    }
+    var pending: [ItemRecord] = []
+    for url in urls {
+      let canonical = url.standardizedFileURL.resolvingSymlinksInPath()
+      guard canonical.path.hasPrefix(directory.path + "/") else {
+        throw RelayFailure(message: "The file action returned an unexpected output location.")
+      }
+      var item = try await makeItem(url: canonical, shelfId: shelfId, storage: "reference")
+      item.storage = "copy"
+      pending.append(item)
+    }
+    guard !pending.isEmpty else { return [] }
+    try commit { data in
+      guard data.shelves.contains(where: { $0.id == shelfId }) else {
+        throw RelayFailure(message: "The destination shelf was removed while the file action was running.")
+      }
+      data.items.append(contentsOf: pending)
+    }
+    return pending.map(\.id)
+  }
+
   @discardableResult
   private func add(paths: [String], shelfId: String, storage: String, lines: [String: Int] = [:])
     async throws -> [String]
@@ -556,7 +726,7 @@ final class ShelfStore {
     let filesRoot = root.appendingPathComponent("Files")
     let stagedDirectory =
       storage == "copy" ? filesRoot.appendingPathComponent(UUID().uuidString) : nil
-    if let stagedDirectory { protectedDirectories.insert(stagedDirectory.path) }
+    if let stagedDirectory { protectManagedDirectory(stagedDirectory) }
     do {
       return try await Task.detached(priority: .userInitiated) {
         let source = url.standardizedFileURL
@@ -588,7 +758,7 @@ final class ShelfStore {
             options: [], includingResourceValuesForKeys: nil, relativeTo: nil))
       }.value
     } catch {
-      if let stagedDirectory { protectedDirectories.remove(stagedDirectory.path) }
+      if let stagedDirectory { releaseManagedDirectory(stagedDirectory) }
       scheduleCleanup()
       throw error
     }
@@ -603,9 +773,9 @@ final class ShelfStore {
     let id = UUID().uuidString
     let url = root.appendingPathComponent("Files").appendingPathComponent(id)
       .appendingPathComponent("\(safeFilename(name ?? "Text \(Self.filenameDate())")).txt")
-    protectedDirectories.insert(url.deletingLastPathComponent().path)
+    protectManagedDirectory(url.deletingLastPathComponent())
     defer {
-      protectedDirectories.remove(url.deletingLastPathComponent().path)
+      releaseManagedDirectory(url.deletingLastPathComponent())
       scheduleCleanup()
     }
     try FileManager.default.createDirectory(
@@ -679,9 +849,9 @@ final class ShelfStore {
       let ext = UTType(identifier as String)?.preferredFilenameExtension
     else { throw RelayFailure(message: "Could not read the copied image.") }
     let directory = root.appendingPathComponent("Files").appendingPathComponent(UUID().uuidString)
-    protectedDirectories.insert(directory.path)
+    protectManagedDirectory(directory)
     defer {
-      protectedDirectories.remove(directory.path)
+      releaseManagedDirectory(directory)
       scheduleCleanup()
     }
     let url = directory.appendingPathComponent("Image \(Self.filenameDate()).\(ext)")

@@ -2348,3 +2348,184 @@ kbd {
   color: var(--blue-text);
   cursor: pointer;
 }
+
+/* File actions: contained styles for the processing and destinations dialog. */
+.file-actions-dialog {
+  width: 610px;
+  gap: 14px;
+}
+.file-actions-dialog > [data-slot="tabs"] {
+  min-width: 0;
+  gap: 0;
+}
+.file-actions-dialog [data-slot="tabs-list"] {
+  width: 100%;
+  justify-content: flex-start;
+  overflow-x: auto;
+  flex-shrink: 0;
+}
+.file-actions-dialog [data-slot="tabs-trigger"] {
+  font-size: 11px;
+  padding-inline: 9px;
+}
+.file-actions-dialog .file-actions-body {
+  min-height: 210px;
+  max-height: min(460px, calc(100dvh - 390px));
+  overflow-y: auto;
+  scrollbar-width: thin;
+  padding: 16px 3px 4px 0;
+}
+.file-actions-dialog fieldset {
+  border: 0;
+  padding: 0;
+  margin: 0;
+  min-width: 0;
+}
+.file-actions-dialog fieldset:disabled {
+  opacity: 0.65;
+}
+.file-actions-dialog legend,
+.file-actions-dialog h3 {
+  font-size: 12px;
+  font-weight: 600;
+  margin: 0;
+}
+.file-actions-dialog .field-label {
+  margin-top: 13px;
+  margin-bottom: 6px;
+}
+.file-actions-dialog fieldset > .field-label:first-of-type {
+  margin-top: 4px;
+}
+.file-actions-dialog .field-hint {
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+.file-actions-dialog select {
+  max-width: 100%;
+  width: 100%;
+}
+.file-actions-dialog .file-actions-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  margin-top: 12px;
+}
+.file-actions-dialog .file-actions-fields .field-label {
+  margin-top: 0;
+}
+.file-actions-dialog .file-actions-submit {
+  margin-top: 17px;
+}
+.file-actions-dialog .file-actions-notice,
+.file-actions-dialog .file-actions-error,
+.file-actions-dialog .file-actions-success {
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--muted);
+  padding: 9px 11px;
+  font-size: 11px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+  margin: 0;
+}
+.file-actions-dialog .file-actions-body > .file-actions-notice {
+  margin-top: 14px;
+}
+.file-actions-dialog .file-actions-error {
+  color: var(--destructive);
+  border-color: var(--destructive);
+}
+.file-actions-dialog .file-actions-success {
+  background: var(--selection);
+}
+.file-actions-dialog .file-actions-section {
+  border-top: 1px solid var(--border);
+  margin-top: 20px;
+  padding-top: 17px;
+}
+.file-actions-dialog .file-actions-folder-picker,
+.file-actions-dialog .file-actions-shortcut-picker {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.file-actions-dialog .file-actions-folder-picker > input,
+.file-actions-dialog .file-actions-shortcut-picker > select {
+  flex: 1;
+  min-width: 0;
+}
+.file-actions-dialog .file-actions-order-label {
+  margin: 18px 0 8px;
+}
+.file-actions-dialog .file-actions-order,
+.file-actions-dialog .file-actions-destinations {
+  list-style: none;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 0;
+  margin: 12px 0 0;
+  max-height: 190px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+.file-actions-dialog .file-actions-order > li,
+.file-actions-dialog .file-actions-destinations > li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  font-size: 11px;
+}
+.file-actions-dialog .file-actions-order > li:last-child,
+.file-actions-dialog .file-actions-destinations > li:last-child {
+  border-bottom: 0;
+}
+.file-actions-dialog .file-actions-position {
+  color: var(--muted-foreground);
+  min-width: 20px;
+  font-variant-numeric: tabular-nums;
+}
+.file-actions-dialog .file-actions-filename,
+.file-actions-dialog .file-actions-destinations > li > div {
+  flex: 1;
+  min-width: 0;
+}
+.file-actions-dialog .file-actions-filename,
+.file-actions-dialog .file-actions-destinations strong,
+.file-actions-dialog .file-actions-destinations small {
+  display: block;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.file-actions-dialog .file-actions-destinations strong {
+  font-weight: 500;
+}
+.file-actions-dialog .file-actions-destinations small {
+  color: var(--muted-foreground);
+  font-size: 10px;
+  margin-top: 3px;
+}
+.file-actions-dialog .dialog-footer {
+  margin-top: 0;
+  padding-top: 12px;
+}
+.file-actions-dialog .dialog-footer > [role="status"] {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+@media (max-width: 540px) {
+  .file-actions-dialog .file-actions-fields {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 10px;
+  }
+  .file-actions-dialog .file-actions-folder-picker {
+    flex-wrap: wrap;
+  }
+  .file-actions-dialog .file-actions-folder-picker > input {
+    flex-basis: 100%;
+  }
+}
