@@ -503,8 +503,9 @@ final class ShelfStore {
     return name
   }
 
+  @discardableResult
   private func add(paths: [String], shelfId: String, storage: String, lines: [String: Int] = [:])
-    async throws
+    async throws -> [String]
   {
     guard paths.count <= 500 else { throw RelayFailure(message: "Add up to 500 files at a time.") }
     guard ["reference", "copy"].contains(storage) else {
@@ -540,6 +541,13 @@ final class ShelfStore {
       if pending.isEmpty { throw RelayFailure(message: message) }
       onNotice?("Added \(pending.count) items. Some files could not be added.\n\(message)")
     }
+    // Return only committed identities, including existing items for duplicate drops.
+    let requested = Set(paths.map {
+      URL(fileURLWithPath: ($0 as NSString).expandingTildeInPath).standardizedFileURL.path
+    })
+    return state.items.filter {
+      $0.shelfId == shelfId && requested.contains($0.sourcePath ?? $0.path)
+    }.map(\.id)
   }
 
   private func makeItem(url: URL, shelfId: String, storage: String, id: String = UUID().uuidString)
@@ -586,7 +594,8 @@ final class ShelfStore {
     }
   }
 
-  private func addText(_ text: String, name: String?, shelfId: String) async throws {
+  @discardableResult
+  private func addText(_ text: String, name: String?, shelfId: String) async throws -> String {
     guard !text.isEmpty else { throw RelayFailure(message: "The clipboard is empty.") }
     guard text.utf8.count <= 2_000_000 else {
       throw RelayFailure(message: "Text capture is limited to 2 MB. Add the source file instead.")
@@ -613,6 +622,7 @@ final class ShelfStore {
       }
       data.items.append(item)
     }
+    return item.id
   }
 
   private func captureClipboard(shelfId: String) async throws {
@@ -660,7 +670,8 @@ final class ShelfStore {
     }
   }
 
-  private func saveImage(_ data: Data, shelfId: String) async throws {
+  @discardableResult
+  private func saveImage(_ data: Data, shelfId: String) async throws -> String {
     guard data.count <= 100_000_000,
       let source = CGImageSourceCreateWithData(
         data as CFData, [kCGImageSourceShouldCache: false] as CFDictionary),
@@ -686,24 +697,30 @@ final class ShelfStore {
       }
       data.items.append(item)
     }
+    return item.id
   }
 
-  func addDroppedURLs(_ urls: [URL]) async {
+  @discardableResult
+  func addDroppedURLs(_ urls: [URL]) async -> [String] {
     do {
-      try await add(
+      return try await add(
         paths: urls.map(\.path), shelfId: state.shelves[0].id,
         storage: state.settings.defaultStorage)
-    } catch { onNotice?(error.localizedDescription) }
+    } catch {
+      onNotice?(error.localizedDescription)
+      return []
+    }
   }
 
-  func captureDroppedText(_ text: String) async {
+  @discardableResult
+  func captureDroppedText(_ text: String) async -> [String] {
     do {
       let paths = PathResolver.resolve(text, basePath: state.settings.projectRoot)
       let found = paths.filter { $0["exists"] as? Bool == true }.compactMap {
         $0["path"] as? String
       }
       if found.isEmpty {
-        try await addText(text, name: nil, shelfId: state.shelves[0].id)
+        return [try await addText(text, name: nil, shelfId: state.shelves[0].id)]
       } else {
         let lines = Dictionary(
           paths.compactMap { entry -> (String, Int)? in
@@ -712,16 +729,21 @@ final class ShelfStore {
             }
             return (path, line)
           }, uniquingKeysWith: { first, _ in first })
-        try await add(
+        return try await add(
           paths: found, shelfId: state.shelves[0].id, storage: state.settings.defaultStorage,
           lines: lines)
       }
-    } catch { onNotice?(error.localizedDescription) }
+    } catch {
+      onNotice?(error.localizedDescription)
+      return []
+    }
   }
 
-  func captureDroppedImage(_ data: Data, extension _: String) async {
-    do { try await saveImage(data, shelfId: state.shelves[0].id) } catch {
+  @discardableResult
+  func captureDroppedImage(_ data: Data, extension _: String) async -> [String] {
+    do { return [try await saveImage(data, shelfId: state.shelves[0].id)] } catch {
       onNotice?(error.localizedDescription)
+      return []
     }
   }
 

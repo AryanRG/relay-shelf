@@ -19,3 +19,6 @@ swiftc -swift-version 5 native/PathResolver.swift native/ShelfStore.swift native
 swiftc -swift-version 5 -D RELAY_TESTING native/*.swift tests/ShellTests.swift \
   -o "$TEST_BUILD/shell-tests" -framework AppKit -framework WebKit -framework PDFKit -framework Carbon -framework ServiceManagement
 "$TEST_BUILD/shell-tests"
+swiftc -swift-version 5 -D RELAY_TESTING native/*.swift tests/DragControllerTests.swift \
+  -o "$TEST_BUILD/drag-tests" -framework AppKit -framework WebKit -framework PDFKit -framework Carbon -framework ServiceManagement
+"$TEST_BUILD/drag-tests"

@@ -12,6 +12,9 @@ final class DragController: NSObject {
   private var nativeOverlay: NativeDragOverlay?
   var onItemClick: ((String, NSEvent) -> Void)?
   var isReceivingExternalDrag: Bool { externalDrag && !nativeDrag && NSEvent.pressedMouseButtons & 1 != 0 }
+  let floatingShelf = FloatingShelfLifecycle()
+  private var idleTimer: Timer?
+  private var outgoingFromFloatingShelf = false
   private var panel: NSPanel?
   private var globalMonitor: Any?
   private var localMonitor: Any?
@@ -50,6 +53,7 @@ final class DragController: NSObject {
 
   func attach(to webView: RelayWebView) {
     self.webView = webView
+    floatingShelf.onChange = { [weak self] in self?.refreshFloatingShelf() }
     webView.dragController = self
     webView.registerForDraggedTypes(Self.pasteboardTypes)
     let overlay = NativeDragOverlay(frame: webView.bounds)
@@ -90,7 +94,8 @@ final class DragController: NSObject {
     if let monitor = localMonitor { NSEvent.removeMonitor(monitor) }
     globalMonitor = nil
     localMonitor = nil
-    panel?.orderOut(nil)
+    floatingShelf.dismiss()
+    idleTimer?.invalidate()
     lastMouseEvent = nil
   }
 
@@ -140,7 +145,7 @@ final class DragController: NSObject {
       resetExternalDrag()
       pasteboardChange = NSPasteboard(name: .drag).changeCount
     case .leftMouseUp:
-      // Let the destination receive its drop before taking the panel away.
+      // Let the destination receive its drop before resetting transient activation.
       DispatchQueue.main.async { [weak self] in self?.resetExternalDrag() }
     case .leftMouseDragged:
       guard activation != "off", !nativeDrag else { return }
@@ -151,7 +156,10 @@ final class DragController: NSObject {
         else { return }
         externalDrag = true
       }
-      guard panel?.isVisible != true else { return }
+      if floatingShelf.isVisible {
+        floatingShelf.setIncoming(true)
+        return
+      }
       let point = NSEvent.mouseLocation
       samples.append((point, event.timestamp))
       samples.removeAll { event.timestamp - $0.time > 0.75 }
@@ -205,9 +213,16 @@ final class DragController: NSObject {
   }
 
   private func showTarget(near point: NSPoint) {
+    ensurePanel()
+    positionPanel(near: point)
+    floatingShelf.showTarget()
+    floatingShelf.setIncoming(true)
+  }
+
+  private func ensurePanel() {
     if panel == nil {
       let target = NSPanel(
-        contentRect: NSRect(x: 0, y: 0, width: 218, height: 116),
+        contentRect: NSRect(x: 0, y: 0, width: 270, height: 148),
         styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
       target.isFloatingPanel = true
       target.becomesKeyOnlyIfNeeded = true
@@ -218,11 +233,14 @@ final class DragController: NSObject {
       target.isOpaque = false
       target.backgroundColor = .clear
       target.hasShadow = true
-      let view = ShelfDropView(frame: NSRect(x: 0, y: 0, width: 218, height: 116))
+      let view = ShelfDropView(frame: NSRect(x: 0, y: 0, width: 270, height: 148))
       view.controller = self
       target.contentView = view
       panel = target
     }
+  }
+
+  private func positionPanel(near point: NSPoint) {
     guard let panel else { return }
     let screen = NSScreen.screens.first { $0.frame.contains(point) } ?? NSScreen.main
     let visible =
@@ -234,14 +252,41 @@ final class DragController: NSObject {
     origin.x = max(visible.minX + 8, min(origin.x, visible.maxX - panel.frame.width - 8))
     origin.y = max(visible.minY + 8, min(origin.y, visible.maxY - panel.frame.height - 8))
     panel.setFrameOrigin(origin)
-    panel.orderFrontRegardless()
   }
 
-  private func resetExternalDrag() {
+  private func refreshFloatingShelf() {
+    idleTimer?.invalidate()
+    idleTimer = nil
+    guard floatingShelf.isVisible else { panel?.orderOut(nil); return }
+    ensurePanel()
+    if panel?.isVisible != true { positionPanel(near: NSEvent.mouseLocation) }
+    let ids = floatingShelf.itemIDs
+    let items = store.snapshot()["items"] as? [[String: Any]] ?? []
+    let name = ids.first.flatMap { id in
+      items.first { $0["id"] as? String == id }?["name"] as? String
+    }
+    (panel?.contentView as? ShelfDropView)?.update(
+      ids: ids, name: name, pending: floatingShelf.pendingCount,
+      failed: floatingShelf.importFailed)
+    panel?.orderFrontRegardless()
+    if let deadline = floatingShelf.deadline {
+      let timer = Timer(timeInterval: max(0.01, deadline - ProcessInfo.processInfo.systemUptime),
+                        repeats: false) { [weak self] _ in
+        MainActor.assumeIsolated { self?.floatingShelf.expire() }
+      }
+      idleTimer = timer
+      RunLoop.main.add(timer, forMode: .common)
+    }
+  }
+
+  func openShelf() { reveal() }
+  func closeFloatingShelf() { floatingShelf.dismiss() }
+
+  func resetExternalDrag() {
     externalDrag = false
     samples.removeAll(keepingCapacity: true)
     pasteboardChange = NSPasteboard(name: .drag).changeCount
-    panel?.orderOut(nil)
+    floatingShelf.resetExternalDrag()
   }
 
   func operation(for sender: NSDraggingInfo) -> NSDragOperation {
@@ -254,7 +299,11 @@ final class DragController: NSObject {
 
   func receive(_ sender: NSDraggingInfo) -> Bool {
     guard operation(for: sender) == .copy else { return false }
-    let pasteboard = sender.draggingPasteboard
+    return receive(pasteboard: sender.draggingPasteboard)
+  }
+
+  // Also used by regression tests without constructing a system drag session.
+  func receive(pasteboard: NSPasteboard) -> Bool {
     if let receivers = pasteboard.readObjects(forClasses: [NSFilePromiseReceiver.self])
       as? [NSFilePromiseReceiver],
       !receivers.isEmpty
@@ -278,8 +327,7 @@ final class DragController: NSObject {
           notice("This image is larger than 64 MB. Drop its file instead.")
           return false
         }
-        finishDrop()
-        Task { await store.captureDroppedImage(data, extension: ext) }
+        importDrop { [store] in await store.captureDroppedImage(data, extension: ext) }
         return true
       }
     }
@@ -291,21 +339,29 @@ final class DragController: NSObject {
   }
 
   private func acceptURLs(_ urls: [URL]) {
-    finishDrop()
-    Task { await store.addDroppedURLs(urls) }
+    importDrop { [store] in await store.addDroppedURLs(urls) }
   }
 
   private func acceptText(_ text: String) {
-    finishDrop()
-    Task { await store.captureDroppedText(text) }
+    importDrop { [store] in await store.captureDroppedText(text) }
   }
 
-  private func finishDrop() {
+  private func importDrop(_ operation: @escaping @MainActor () async -> [String]) {
+    let token = finishDrop()
+    Task { [weak self] in
+      let ids = await operation()
+      self?.floatingShelf.completeImport(token, ids: ids)
+    }
+  }
+
+  private func finishDrop() -> UUID {
+    let token = floatingShelf.beginImport()
     resetExternalDrag()
-    reveal()
+    return token
   }
 
-  private func receivePromises(_ receivers: [NSFilePromiseReceiver]) -> Bool {
+  func receivePromises(_ receivers: [NSFilePromiseReceiver]) -> Bool {
+    guard !receivers.isEmpty else { return false }
     let identifier = UUID()
     let directory = incomingRoot.appendingPathComponent(identifier.uuidString, isDirectory: true)
     do {
@@ -315,16 +371,23 @@ final class DragController: NSObject {
       notice("Could not receive the promised file. \(error.localizedDescription)")
       return false
     }
-    let expected = receivers.reduce(0) { $0 + max(1, $1.fileNames.count) }
     promises[identifier] = PromiseDrop(
-      receivers: receivers, directory: directory, remaining: expected)
-    finishDrop()
+      receivers: receivers, directory: directory, remaining: 0, token: finishDrop())
+    // A provider can cancel without delivering all its callbacks.
+    promises[identifier]?.timeout = Task { [weak self] in
+      try? await Task.sleep(nanoseconds: 120_000_000_000)
+      guard !Task.isCancelled else { return }
+      self?.promiseTimedOut(identifier)
+    }
     for receiver in receivers {
       receiver.receivePromisedFiles(
         atDestination: directory, options: [:], operationQueue: promiseQueue
       ) { [weak self] url, error in
         Task { @MainActor in self?.receivedPromise(identifier, url: url, error: error) }
       }
+      // fileNames is populated only after calling receivePromisedFiles. Callbacks
+      // enter the main actor after this synchronous loop has counted every file.
+      promises[identifier]?.remaining += max(1, receiver.fileNames.count, receiver.fileTypes.count)
     }
     return true
   }
@@ -338,17 +401,32 @@ final class DragController: NSObject {
     }
     drop.remaining -= 1
     guard drop.remaining <= 0 else { return }
-    promises.removeValue(forKey: identifier)
+    finishPromises(identifier)
+  }
+
+  func promiseTimedOut(_ identifier: UUID) {
+    guard let drop = promises[identifier] else { return }
+    notice("The file provider is taking too long. Files arriving later will still be saved to the shelf.")
+    floatingShelf.completeImport(drop.token, ids: [])
+    // This is a presentation timeout, not provider cancellation. Keep the receiver
+    // and directory protected until ALL callbacks arrive, even after dismissal.
+    // A provider that never finishes stays protected for this process's lifetime.
+  }
+
+  private func finishPromises(_ identifier: UUID) {
+    guard let drop = promises.removeValue(forKey: identifier) else { return }
+    drop.timeout?.cancel()
     if drop.urls.isEmpty {
       try? FileManager.default.removeItem(at: drop.directory)
       store.releaseManagedDirectory(drop.directory)
+      floatingShelf.completeImport(drop.token, ids: [])
       return
     }
-    finishDrop()
-    Task { [store] in
+    Task { [weak self, store] in
       defer { store.releaseManagedDirectory(drop.directory) }
       // Keep promise files protected across the store's asynchronous import and commit.
-      await store.addDroppedURLs(drop.urls)
+      let ids = await store.addDroppedURLs(drop.urls)
+      self?.floatingShelf.completeImport(drop.token, ids: ids)
     }
   }
 
@@ -399,15 +477,20 @@ final class DragController: NSObject {
       return item
     }
     nativeDrag = true
+    outgoingFromFloatingShelf = source is ShelfDropView
+    floatingShelf.beginOutgoingDrag()
     resetExternalDrag()
     let session = source.beginDraggingSession(with: items, event: event, source: source)
     session.draggingFormation = .stack
     session.animatesToStartingPositionsOnCancelOrFail = true
   }
 
-  func dragEnded() {
+  func dragEnded(operation: NSDragOperation) {
     // Copy-only sessions leave shelf items intact on both success and cancellation.
     nativeDrag = false
+    floatingShelf.endOutgoingDrag(succeeded: outgoingFromFloatingShelf
+      && !operation.intersection([.copy, .move, .link]).isEmpty)
+    outgoingFromFloatingShelf = false
     lastMouseEvent = nil
     preparedDragIDs = []
     dragOrigin = nil
@@ -421,11 +504,14 @@ private final class PromiseDrop {
   let directory: URL
   var remaining: Int
   var urls: [URL] = []
+  let token: UUID
+  var timeout: Task<Void, Never>?
 
-  init(receivers: [NSFilePromiseReceiver], directory: URL, remaining: Int) {
+  init(receivers: [NSFilePromiseReceiver], directory: URL, remaining: Int, token: UUID) {
     self.receivers = receivers
     self.directory = directory
     self.remaining = remaining
+    self.token = token
   }
 }
 
@@ -456,75 +542,6 @@ final class RelayWebView: WKWebView, NSDraggingSource {
   func draggingSession(
     _ session: NSDraggingSession, endedAt screenPoint: NSPoint, operation: NSDragOperation
   ) {
-    dragController?.dragEnded()
-  }
-}
-
-@MainActor
-private final class ShelfDropView: NSVisualEffectView {
-  weak var controller: DragController?
-
-  override init(frame frameRect: NSRect) {
-    super.init(frame: frameRect)
-    material = .hudWindow
-    blendingMode = .behindWindow
-    state = .active
-    wantsLayer = true
-    layer?.cornerRadius = 18
-    layer?.borderWidth = 1
-    layer?.borderColor = NSColor.separatorColor.cgColor
-    registerForDraggedTypes(DragController.pasteboardTypes)
-
-    let icon = NSImageView(
-      image: NSImage(
-        systemSymbolName: "square.stack.3d.up.fill", accessibilityDescription: "Relay Shelf")
-        ?? NSImage())
-    icon.contentTintColor = .controlAccentColor
-    let title = NSTextField(labelWithString: "Drop into Relay Shelf")
-    title.font = .systemFont(ofSize: 13, weight: .semibold)
-    let subtitle = NSTextField(labelWithString: "Files, links, images & text")
-    subtitle.font = .systemFont(ofSize: 11)
-    subtitle.textColor = .secondaryLabelColor
-    let stack = NSStackView(views: [icon, title, subtitle])
-    stack.orientation = .vertical
-    stack.spacing = 7
-    stack.translatesAutoresizingMaskIntoConstraints = false
-    addSubview(stack)
-    NSLayoutConstraint.activate([
-      stack.centerXAnchor.constraint(equalTo: centerXAnchor),
-      stack.centerYAnchor.constraint(equalTo: centerYAnchor),
-      icon.heightAnchor.constraint(equalToConstant: 26),
-      icon.widthAnchor.constraint(equalToConstant: 30),
-    ])
-    setAccessibilityLabel("Relay Shelf drop target")
-  }
-
-  required init?(coder: NSCoder) { fatalError("init(coder:) is unavailable") }
-
-  override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
-    let operation = controller?.operation(for: sender) ?? []
-    layer?.borderColor =
-      operation == .copy ? NSColor.controlAccentColor.cgColor : NSColor.separatorColor.cgColor
-    layer?.borderWidth = operation == .copy ? 2 : 1
-    return operation
-  }
-
-  override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
-    controller?.operation(for: sender) ?? []
-  }
-
-  override func draggingExited(_ sender: NSDraggingInfo?) { resetHighlight() }
-  override func draggingEnded(_ sender: NSDraggingInfo) { resetHighlight() }
-  override func prepareForDragOperation(_ sender: NSDraggingInfo) -> Bool {
-    controller?.operation(for: sender) == .copy
-  }
-  override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
-    resetHighlight()
-    return controller?.receive(sender) ?? false
-  }
-
-  private func resetHighlight() {
-    layer?.borderWidth = 1
-    layer?.borderColor = NSColor.separatorColor.cgColor
+    dragController?.dragEnded(operation: operation)
   }
 }

@@ -4,7 +4,7 @@ A lightweight macOS file shelf for collecting files, pasting paths, and previewi
 
 Built with **Swift + AppKit**, **system WebKit**, and **React + shadcn/ui**. Available under the **MIT license**.
 
-[Download the macOS prerelease](https://github.com/AryanRG/relay-shelf/releases/tag/v1.0.0) · [Build from source](#build-from-source) · [Report an issue](https://github.com/AryanRG/relay-shelf/issues)
+[Download the macOS prerelease](https://github.com/AryanRG/relay-shelf/releases/tag/v1.0.1) · [Build from source](#build-from-source) · [Report an issue](https://github.com/AryanRG/relay-shelf/issues)
 
 > **Early prerelease.** Requires Apple Silicon and macOS 14 or newer. The download is ad-hoc signed and unnotarized, so macOS may block it from opening. Cross-application drag delivery still needs manual verification.
 
@@ -26,7 +26,7 @@ Built with **Swift + AppKit**, **system WebKit**, and **React + shadcn/ui**. Ava
 2. Extract the archive and move **Relay Shelf.app** into **Applications**.
 3. Open the app. Use its menu-bar icon or **⌘⇧Space** to bring the shelf back after closing the window.
 
-The published build is for Apple Silicon. Runtime checks were performed on macOS 27.2. Developer ID signing and notarization are still pending. [Release downloads](https://github.com/AryanRG/relay-shelf/releases/tag/v1.0.0)
+The published build is for Apple Silicon. Runtime checks were performed on macOS 27.2. Developer ID signing and notarization are still pending. [Release downloads](https://github.com/AryanRG/relay-shelf/releases/tag/v1.0.1)
 
 To verify the archives, download both ZIP assets and `SHA256SUMS.txt` into the same folder, then run the following command from that folder.
 
@@ -77,7 +77,11 @@ Add a folder under **Preferences → Folder watches** and choose its destination
 
 Preferences offer pointer shake while dragging, dragging to a screen edge, activation when a supported file drag begins, and manual activation. You can also enable **Always on top**, **Open at login**, and light, dark, or system appearance.
 
-Native drag sources and a floating drop target are implemented. End-to-end delivery between applications remains a manual verification item for this prerelease.
+After a drop, the floating shelf displays the captured item or item count and stays available for dragging out. Additional drops join the same floating shelf. Use **Open shelf** to view the full collection or the close button to dismiss the small window.
+
+The floating shelf closes after a successful drag-out or 60 seconds of inactivity. Hovering, receiving a drop, and dragging out pause the idle timeout. A canceled drag keeps the shelf available. Captured items remain in the main shelf after the floating window closes.
+
+End-to-end drag delivery between applications remains a manual verification item for this prerelease.
 
 ## Command line
 
@@ -144,7 +148,8 @@ For isolated development, set `RELAY_SHELF_DATA_DIR` to a separate directory whe
 | --- | --- |
 | `native/App.swift` | App lifecycle, windows, menu bar, shortcuts, WebKit bridge, and single-instance delivery |
 | `native/DragController.swift` | Native drag sources, floating target, and file-promise reception |
-| `native/NativeDragOverlay.swift` | Native drag interaction over shelf rows |
+| `native/NativeDragOverlay.swift` | Floating shelf view and native drag interaction over shelf rows |
+| `native/FloatingShelfLifecycle.swift` | Floating shelf retention, idle expiry, and drag outcomes |
 | `native/ShelfStore.swift` | Persistent state, captures, copies, previews, and shelf actions |
 | `native/PathResolver.swift` | Local filesystem path parsing |
 | `native/DirectoryWatcher.swift` | Event-driven folder monitoring |
@@ -154,7 +159,7 @@ For isolated development, set `RELAY_SHELF_DATA_DIR` to a separate directory whe
 
 ## Verification status
 
-- **Automated checks passed** — 427 path-resolution assertions, 63 directory-watcher assertions, and integration checks for storage, persistence, concurrent imports, cleanup, undo, preview limits, CLI routing, instance locking, and PDF generation.
+- **Automated checks passed** — 427 path-resolution assertions, 63 directory-watcher assertions, and integration checks for storage, persistence, concurrent imports, cleanup, undo, preview limits, CLI routing, instance locking, PDF generation, and floating-shelf lifecycle behavior.
 - **Live checks passed** — quoted home-relative path import, document previews, persistent shelves, native file selection, clipboard file delivery into Finder, ZIP export, and rendered PDF export.
 - **Manual verification pending** — cross-application drag-and-drop delivery.
 - **Distribution limits** — Apple Silicon build, runtime-tested on macOS 27.2, ad-hoc signing, and Developer ID notarization pending.
