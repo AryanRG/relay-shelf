@@ -13,6 +13,15 @@ struct ShellTests {
     precondition(second.paths == [path] && second.shelf == "Project")
     let third = RelayLaunchRequest(arguments: ["--add", path, "--shelf", "Project"])
     precondition(third.paths == [path] && third.shelf == "Project")
+    let reading = RelayLaunchRequest(arguments: ["--view", path])
+    precondition(reading.opensMarkdown && !reading.show && reading.paths == [path])
+    let importing = RelayLaunchRequest(arguments: ["--view", "--add", path])
+    precondition(!importing.opensMarkdown && importing.show && importing.paths == [path])
+    precondition(MarkdownSupport.isMarkdown(URL(fileURLWithPath: "/tmp/Report.MD")))
+    precondition(MarkdownSupport.isMarkdown(URL(fileURLWithPath: "/tmp/Report.markdown")))
+    precondition(!MarkdownSupport.isMarkdown(URL(fileURLWithPath: "/tmp/Report.txt")))
+    precondition(!MarkdownSupport.isMarkdown(URL(string: "https://example.com/report.md")!))
+    precondition(!MarkdownSupport.isMarkdown(URL(string: "file://remote-host/report.md")!))
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(
       "RelayLockTests-\(UUID().uuidString)")
     defer { try? FileManager.default.removeItem(at: root) }

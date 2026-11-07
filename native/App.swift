@@ -43,11 +43,13 @@ struct RelayLaunchRequest {
   var paths: [String] = []
   var shelf: String?
   var show = true
+  var opensMarkdown = false
 
-  init(paths: [String] = [], shelf: String? = nil, show: Bool = true) {
+  init(paths: [String] = [], shelf: String? = nil, show: Bool = true, opensMarkdown: Bool = false) {
     self.paths = paths
     self.shelf = shelf
     self.show = show
+    self.opensMarkdown = opensMarkdown
   }
 
   init(arguments: [String]) {
@@ -56,7 +58,14 @@ struct RelayLaunchRequest {
     while index < arguments.count {
       let argument = arguments[index]
       switch argument {
-      case "--add": adding = true
+      case "--add":
+        adding = true
+        opensMarkdown = false
+        show = true
+      case "--view":
+        adding = true
+        opensMarkdown = true
+        show = false
       case "--shelf":
         if index + 1 < arguments.count {
           index += 1
@@ -146,7 +155,8 @@ final class RelayInstance {
       recentIDs.append(identifier)
       if recentIDs.count > 128 { recentIDs.removeFirst() }
       let request = RelayLaunchRequest(
-        paths: paths, shelf: object["shelf"] as? String, show: object["show"] as? Bool ?? true)
+        paths: paths, shelf: object["shelf"] as? String, show: object["show"] as? Bool ?? true,
+        opensMarkdown: object["opensMarkdown"] as? Bool ?? false)
       if let onRequest { onRequest(request) } else { pending.append(request) }
     }
     DistributedNotificationCenter.default().postNotificationName(
@@ -158,6 +168,7 @@ final class RelayInstance {
     let payload: [String: Any] = [
       "id": identifier, "paths": request.paths,
       "shelf": request.shelf as Any? ?? NSNull(), "show": request.show,
+      "opensMarkdown": request.opensMarkdown,
     ]
     guard let data = try? JSONSerialization.data(withJSONObject: payload),
       let json = String(data: data, encoding: .utf8)
@@ -194,6 +205,8 @@ final class RelayAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
   private var statusItem: NSStatusItem?
   private var dragController: DragController!
   private var capturingScreenshot = false
+  private var receivedFileOpen = false
+  private var markdownViewers: [String: MarkdownViewerController] = [:]
   private var resourceHandler: RelayResourceHandler!
   private var hotKeys: RelayHotKeys?
   private var rendererReady = false
@@ -241,7 +254,12 @@ final class RelayAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
       if identifier == 1 { self?.showWindow() } else { self?.capture() }
     }
     for message in hotKeys?.failures ?? [] { showNotice(message) }
-    enqueue(initialRequest)
+    var launch = initialRequest
+    let defaultLaunch = (notification.userInfo?[NSApplication.launchIsDefaultUserInfoKey] as? NSNumber)?.boolValue ?? true
+    if (receivedFileOpen || !defaultLaunch) && launch.paths.isEmpty && launch.shelf == nil {
+      launch.show = false
+    }
+    enqueue(launch)
     instance?.onRequest = { [weak self] request in self?.enqueue(request) }
     // Metadata/bookmark work runs once on launch, independently of rendering.
     Task {
@@ -278,7 +296,7 @@ final class RelayAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
     configuration.userContentController.add(RelayScriptHandler(delegate: self), name: "relay")
     configuration.userContentController.addUserScript(
       WKUserScript(
-        source: bridgeScript(for: pageURL), injectionTime: .atDocumentStart, forMainFrameOnly: true)
+        source: Self.bridgeScript(for: pageURL), injectionTime: .atDocumentStart, forMainFrameOnly: true)
     )
     resourceHandler = RelayResourceHandler(store: store)
     configuration.setURLSchemeHandler(resourceHandler, forURLScheme: "relay-file")
@@ -341,6 +359,14 @@ final class RelayAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
     addMenuItem("Hide Relay Shelf", to: appMenu, action: #selector(hideWindow), key: "h")
     appMenu.addItem(.separator())
     addMenuItem("Quit Relay Shelf", to: appMenu, action: #selector(quit), key: "q")
+    let fileMenu = NSMenu(title: "File")
+    addMenuItem("Open Markdown…", to: fileMenu, action: #selector(chooseMarkdown))
+    addMenuItem("Make Default Markdown Viewer", to: fileMenu, action: #selector(makeMarkdownDefault))
+    fileMenu.addItem(.separator())
+    fileMenu.addItem(withTitle: "Close Window", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
+    let fileItem = NSMenuItem()
+    fileItem.submenu = fileMenu
+    main.addItem(fileItem)
     let edit = NSMenu(title: "Edit")
     for (title, action, key) in [
       ("Undo", Selector(("undo:")), "z"),
@@ -396,6 +422,31 @@ final class RelayAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
   @objc private func openFromMenu() { showWindow() }
   @objc private func hideWindow() { window?.orderOut(nil) }
   @objc private func quit() { NSApp.terminate(nil) }
+
+  @objc private func chooseMarkdown() {
+    let picker = NSOpenPanel()
+    picker.allowedContentTypes = MarkdownSupport.extensions.compactMap { UTType(filenameExtension: $0) }
+    picker.canChooseDirectories = false
+    picker.allowsMultipleSelection = true
+    picker.message = "Open Markdown in a reading window"
+    Task {
+      guard await picker.begin() == .OK else { return }
+      for url in picker.urls {
+        do { try openMarkdownDocument(url) }
+        catch { showWindow(); showNotice(error.localizedDescription) }
+      }
+    }
+  }
+
+  @objc private func makeMarkdownDefault() {
+    Task {
+      do {
+        try await MarkdownSupport.makeDefault(applicationURL: Bundle.main.bundleURL)
+        showWindow()
+        showNotice("Relay Shelf is the default Markdown viewer.")
+      } catch { showWindow(); showNotice(error.localizedDescription) }
+    }
+  }
 
   @objc private func reopenFloatingShelf() {
     do { try dragController.reopenFloatingShelf() } catch { showNotice(error.localizedDescription) }
@@ -474,12 +525,45 @@ final class RelayAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
   func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
   func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool
   {
-    showWindow()
+    if let viewer = markdownViewers.values.first(where: { $0.window === NSApp.mainWindow })
+      ?? markdownViewers.values.first {
+      viewer.show()
+    } else { showWindow() }
     return true
   }
 
+  func applicationShouldOpenUntitledFile(_ sender: NSApplication) -> Bool { false }
+
   func application(_ application: NSApplication, open urls: [URL]) {
-    enqueue(RelayLaunchRequest(paths: urls.filter(\.isFileURL).map(\.path)))
+    let files = urls.filter(\.isFileURL)
+    guard !files.isEmpty else { return }
+    receivedFileOpen = true
+    enqueue(RelayLaunchRequest(paths: files.map(\.path), show: false, opensMarkdown: true))
+  }
+
+  func openMarkdownDocument(_ url: URL) throws {
+    guard MarkdownSupport.isMarkdown(url) else {
+      throw RelayFailure(message: "Choose a Markdown file with an .md or .markdown extension.")
+    }
+    let key = url.standardizedFileURL.resolvingSymlinksInPath().path
+    if let existing = markdownViewers[key] {
+      if let anchor = url.fragment { existing.navigateToAnchor(anchor) }
+      existing.show()
+      return
+    }
+    let viewer = try MarkdownViewerController(url: url, entryURL: pageURL,
+      store: store, showShelf: { [weak self] in self?.showWindow() },
+      openMarkdown: { [weak self] next in
+        do { try self?.openMarkdownDocument(next) }
+        catch { self?.showWindow(); self?.showNotice(error.localizedDescription) }
+      }, onClose: { [weak self] in
+        guard let self else { return }
+        self.markdownViewers.removeValue(forKey: key)
+        if self.markdownViewers.isEmpty { NSApp.setActivationPolicy(.accessory) }
+      })
+    markdownViewers[key] = viewer
+    NSApp.setActivationPolicy(.regular)
+    viewer.show()
   }
 
   func applicationWillTerminate(_ notification: Notification) {
@@ -509,15 +593,37 @@ final class RelayAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
     Task {
       while !requests.isEmpty {
         let next = requests.removeFirst()
-        do { try await process(next) } catch { showNotice(error.localizedDescription) }
+        do { try await process(next) } catch {
+          if next.opensMarkdown { showWindow() }
+          showNotice(error.localizedDescription)
+        }
       }
       processingRequests = false
     }
   }
 
   private func process(_ request: RelayLaunchRequest) async throws {
-    if request.show { showWindow() }
+    if request.show && !request.opensMarkdown { showWindow() }
     guard !request.paths.isEmpty || request.shelf != nil else { return }
+    if request.opensMarkdown {
+      var otherFiles: [String] = []
+      for input in request.paths {
+        let resolved = try await store.handle("resolve", payload: ["text": input]) as? [[String: Any]] ?? []
+        guard !resolved.isEmpty else { throw RelayFailure(message: "The supplied file location could not be resolved.") }
+        for file in resolved {
+          guard file["exists"] as? Bool == true, let path = file["path"] as? String else {
+            throw RelayFailure(message: file["error"] as? String ?? "The requested file is unavailable.")
+          }
+          let url = URL(fileURLWithPath: path)
+          if MarkdownSupport.isMarkdown(url) { try openMarkdownDocument(url) }
+          else { otherFiles.append(path) }
+        }
+      }
+      if !otherFiles.isEmpty {
+        try await process(RelayLaunchRequest(paths: otherFiles, shelf: request.shelf))
+      }
+      return
+    }
     var shelfID: String?
     if let name = request.shelf?.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty {
       let shelves = store.snapshot()["shelves"] as? [[String: Any]] ?? []
@@ -591,6 +697,20 @@ final class RelayAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
       do {
         let result: Any
         switch command {
+        case "openMarkdownViewer":
+          let path = payload["path"] as? String ?? ""
+          let resolved = try await store.handle("resolve", payload: ["text": path]) as? [[String: Any]] ?? []
+          guard let file = resolved.first, file["exists"] as? Bool == true,
+            let resolvedPath = file["path"] as? String else {
+            throw RelayFailure(message: "The Markdown file is unavailable.")
+          }
+          try openMarkdownDocument(URL(fileURLWithPath: resolvedPath))
+          result = NSNull()
+        case "open" where MarkdownSupport.isMarkdown(URL(fileURLWithPath: payload["path"] as? String ?? "")):
+          // The existing store authorization check still applies to shelf Open actions.
+          let url = try store.authorize(payload["path"] as? String ?? "")
+          try openMarkdownDocument(url)
+          result = NSNull()
         case "showFloatingShelf":
           try dragController.showFloatingShelf(ids: payload["ids"] as? [String] ?? [])
           result = NSNull()
@@ -728,7 +848,7 @@ final class RelayAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
     webView.reload()
   }
 
-  private func bridgeScript(for url: URL) -> String {
+  static func bridgeScript(for url: URL) -> String {
     let literal = String(
       data: try! JSONSerialization.data(
         withJSONObject: url.absoluteString, options: .fragmentsAllowed), encoding: .utf8)!

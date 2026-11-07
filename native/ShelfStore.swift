@@ -258,7 +258,7 @@ final class ShelfStore {
     return state.items.filter { ids.contains($0.id) }
   }
 
-  private func authorize(_ path: String) throws -> URL {
+  func authorize(_ path: String) throws -> URL {
     let url = URL(fileURLWithPath: path).standardizedFileURL
     guard allowedPaths.contains(url.path) || state.items.contains(where: { $0.path == url.path })
     else {

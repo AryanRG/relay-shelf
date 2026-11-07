@@ -545,10 +545,14 @@ export function PreviewPanel({
             <Button
               variant="outline"
               size="sm"
-              onClick={open}
+              onClick={
+                type === "markdown"
+                  ? () => void perform("openMarkdownViewer", { path })
+                  : open
+              }
               disabled={item.kind === "text" && !path}
             >
-              Open
+              {type === "markdown" ? "Open Markdown viewer" : "Open"}
               <ArrowUpRight size={13} />
             </Button>
             {item.kind !== "url" && (

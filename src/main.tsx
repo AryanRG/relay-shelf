@@ -5,8 +5,13 @@ import "@fontsource/inter/latin-600.css";
 import "./styles.css";
 import { BridgeProvider } from "@/lib/bridge";
 import App from "@/App";
+import MarkdownViewer from "@/MarkdownViewer";
 ReactDOM.createRoot(document.getElementById("root")!).render(
-  <BridgeProvider>
-    <App />
-  </BridgeProvider>,
+  window.__relayMarkdownViewer ? (
+    <MarkdownViewer />
+  ) : (
+    <BridgeProvider>
+      <App />
+    </BridgeProvider>
+  ),
 );

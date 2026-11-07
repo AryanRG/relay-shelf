@@ -2529,3 +2529,370 @@ kbd {
     flex-basis: 100%;
   }
 }
+.markdown-reader {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: var(--background);
+  color: var(--foreground);
+}
+.reader-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  min-height: 70px;
+  padding: 12px 20px;
+  border-bottom: 1px solid var(--border);
+  background: var(--background);
+}
+.reader-document-title {
+  flex: 1;
+  min-width: 120px;
+  overflow: hidden;
+}
+.reader-document-title strong,
+.reader-document-title span {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.reader-document-title strong {
+  font-size: 13px;
+  font-weight: 600;
+}
+.reader-document-title span {
+  font-size: 10px;
+  margin-top: 3px;
+  color: var(--muted-foreground);
+}
+.reader-toolbar-actions,
+.reader-font-controls {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+.reader-font-controls {
+  border-left: 1px solid var(--border);
+  padding-left: 7px;
+  margin-left: 5px;
+}
+.reader-font-controls span {
+  width: 20px;
+  text-align: center;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted-foreground);
+}
+.reader-tabs {
+  flex-shrink: 0;
+}
+.reader-layout {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+.reader-outline {
+  width: 224px;
+  flex-shrink: 0;
+  overflow: auto;
+  padding: 26px 14px;
+  border-right: 1px solid var(--border);
+  background: var(--soft);
+  scrollbar-width: thin;
+}
+.reader-outline-label {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--muted-foreground);
+  margin: 0 12px 14px;
+}
+.reader-outline button {
+  display: block;
+  width: 100%;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  padding: 7px 10px;
+  margin: 2px 0;
+  font-size: 12px;
+  line-height: 1.5;
+  border-radius: 5px;
+  color: var(--muted-foreground);
+  overflow-wrap: anywhere;
+}
+.reader-outline button:hover {
+  color: var(--foreground);
+  background: var(--accent);
+}
+.reader-outline button.active {
+  color: var(--blue-text);
+  background: var(--selection);
+}
+.reader-outline p {
+  margin: 12px;
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--muted-foreground);
+}
+.reader-scroll {
+  flex: 1;
+  min-width: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+.reader-rendered {
+  padding: 44px 40px 100px;
+}
+.reader-rendered[hidden],
+.reader-source[hidden] {
+  display: none;
+}
+.reader-rendered .markdown {
+  padding: 0;
+  margin: 0 auto;
+  max-width: 78ch;
+  font-size: var(--reader-font-size);
+  line-height: 1.8;
+}
+.reader-rendered .markdown h1 {
+  font-size: 2em;
+  margin: 1.4em 0 0.65em;
+  letter-spacing: -0.035em;
+}
+.reader-rendered .markdown h2 {
+  font-size: 1.5em;
+  margin: 1.8em 0 0.7em;
+  padding-bottom: 0.35em;
+  letter-spacing: -0.025em;
+}
+.reader-rendered .markdown h3 {
+  font-size: 1.2em;
+  margin: 1.6em 0 0.6em;
+}
+.reader-rendered .markdown h4 {
+  font-size: 1.05em;
+}
+.reader-rendered .markdown h5,
+.reader-rendered .markdown h6 {
+  font-size: 1em;
+}
+.reader-rendered .markdown > :first-child {
+  margin-top: 0;
+}
+.reader-rendered .markdown :is(h1, h2, h3, h4, h5, h6) {
+  line-height: 1.35;
+  scroll-margin-top: 28px;
+}
+.reader-rendered .markdown p {
+  margin-bottom: 1.1em;
+}
+.reader-rendered .markdown :is(ul, ol) {
+  padding-left: 1.5em;
+  margin: 0.8em 0 1.2em;
+}
+.reader-rendered .markdown li {
+  margin-bottom: 0.3em;
+}
+.reader-rendered .markdown .task-list-item {
+  list-style: none;
+}
+.reader-rendered .markdown .task-list-item input {
+  margin-left: -1.3em;
+  margin-right: 0.6em;
+}
+.reader-rendered .markdown pre {
+  font-size: 0.9em;
+  padding: 18px;
+  margin: 1.4em 0;
+  line-height: 1.65;
+}
+.reader-rendered .markdown pre code {
+  font-size: 1em;
+}
+.reader-rendered .markdown table {
+  font-size: 0.9em;
+  margin: 1.4em 0;
+}
+.reader-rendered .markdown :is(th, td) {
+  padding: 0.6em 0.8em;
+}
+.reader-rendered .markdown blockquote {
+  padding: 0.6em 1em;
+  margin: 1.4em 0;
+}
+.reader-rendered .markdown img {
+  display: inline-block;
+  max-width: 100%;
+  height: auto;
+  border-radius: 5px;
+}
+.reader-image-placeholder {
+  display: inline-block;
+  max-width: 100%;
+  border: 1px dashed var(--border);
+  border-radius: 5px;
+  padding: 10px 14px;
+  color: var(--muted-foreground);
+  font-size: 0.85em;
+}
+.reader-image-placeholder small {
+  display: block;
+  font-size: 0.85em;
+  margin-top: 2px;
+}
+.reader-source {
+  padding: 36px 40px 100px;
+  margin: 0 auto;
+  max-width: 100ch;
+  min-height: 100%;
+  font:
+    calc(var(--reader-font-size) * 0.85)/1.8 "SFMono-Regular",
+    Menlo,
+    monospace;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  tab-size: 2;
+  user-select: text;
+}
+.reader-find {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  gap: 5px;
+  padding: 8px 20px;
+  border-bottom: 1px solid var(--border);
+  background: var(--soft);
+}
+.reader-find > svg {
+  color: var(--muted-foreground);
+  margin-right: 5px;
+}
+.reader-find input {
+  width: min(340px, 45vw);
+}
+.reader-find > span {
+  min-width: 80px;
+  margin: 0 5px;
+  text-align: right;
+  font-size: 11px;
+  color: var(--muted-foreground);
+  font-variant-numeric: tabular-nums;
+}
+.reader-banner {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 7px 20px;
+  border-bottom: 1px solid var(--border);
+  background: var(--soft);
+  font-size: 12px;
+  line-height: 1.6;
+}
+.reader-banner > span {
+  flex: 1;
+  min-width: 160px;
+  overflow-wrap: anywhere;
+}
+.reader-warning {
+  background: light-dark(#fffaed, #302b20);
+}
+.reader-error {
+  color: light-dark(#a33c30, #f1a69a);
+  background: light-dark(#fff7f5, #332724);
+}
+.reader-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 12px;
+  padding: 100px 24px;
+  color: var(--muted-foreground);
+  text-align: center;
+}
+.reader-empty h1 {
+  font-size: 18px;
+  color: var(--foreground);
+}
+.reader-empty p {
+  margin: 0;
+  font-size: 13px;
+}
+.reader-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 20px;
+  border-top: 1px solid var(--border);
+  color: var(--muted-foreground);
+  font-size: 10px;
+}
+::highlight(reader-find) {
+  background-color: #f4d45e66;
+  color: inherit;
+}
+::highlight(reader-find-current) {
+  background-color: #e9ad3f;
+  color: #222;
+}
+@media (max-width: 900px) {
+  .reader-toolbar {
+    gap: 8px;
+    padding: 10px 14px;
+  }
+  .reader-document-title {
+    min-width: 100px;
+  }
+  .reader-outline {
+    width: 190px;
+    padding: 22px 8px;
+  }
+  .reader-rendered {
+    padding: 32px 26px 80px;
+  }
+}
+@media (max-width: 650px) {
+  .reader-toolbar {
+    column-gap: 6px;
+  }
+  .reader-tabs {
+    order: 3;
+    flex: 1;
+  }
+  .reader-toolbar-actions {
+    order: 4;
+  }
+  .reader-outline {
+    width: 160px;
+  }
+  .reader-rendered {
+    padding: 28px 20px 70px;
+  }
+  .reader-source {
+    padding: 24px 20px 70px;
+  }
+  .reader-find {
+    padding-inline: 10px;
+    gap: 2px;
+  }
+  .reader-find > span {
+    min-width: 65px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .markdown-reader .spin {
+    animation: none;
+  }
+}
+
+.reader-local-image {
+  display: inline-block;
+  max-width: 100%;
+}

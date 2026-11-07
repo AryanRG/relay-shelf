@@ -31,3 +31,6 @@ swiftc -swift-version 5 -D RELAY_TESTING native/*.swift tests/FileActionsTests.s
 swiftc -swift-version 5 -D RELAY_TESTING native/*.swift tests/SystemActionsTests.swift \
   -o "$TEST_BUILD/system-action-tests" -framework AppKit -framework WebKit -framework PDFKit -framework Carbon -framework ServiceManagement -framework Vision
 "$TEST_BUILD/system-action-tests"
+swiftc -swift-version 5 -D RELAY_TESTING native/*.swift tests/MarkdownViewerTests.swift \
+  -o "$TEST_BUILD/markdown-viewer-tests" -framework AppKit -framework WebKit -framework PDFKit -framework Carbon -framework ServiceManagement -framework Vision
+"$TEST_BUILD/markdown-viewer-tests"

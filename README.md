@@ -4,7 +4,7 @@ A lightweight macOS file shelf for collecting files, pasting paths, and previewi
 
 Built with **Swift + AppKit**, **system WebKit**, and **React + shadcn/ui**. Available under the **MIT license**.
 
-[Download the macOS prerelease](https://github.com/AryanRG/relay-shelf/releases/tag/v1.1.1) · [Build from source](#build-from-source) · [Report an issue](https://github.com/AryanRG/relay-shelf/issues)
+[Download the macOS prerelease](https://github.com/AryanRG/relay-shelf/releases/tag/v1.2.0) · [Build from source](#build-from-source) · [Report an issue](https://github.com/AryanRG/relay-shelf/issues)
 
 > **Early prerelease.** Requires Apple Silicon and macOS 14 or newer. The download is ad-hoc signed and unnotarized, so macOS may block it from opening. Cross-application drag delivery still needs manual verification.
 
@@ -14,6 +14,7 @@ Built with **Swift + AppKit**, **system WebKit**, and **React + shadcn/ui**. Ava
 | --- | --- |
 | Capture | Paste file and folder paths, choose files, capture clipboard files, images, links, and text |
 | Preview | Rendered and source Markdown, text, JSON, CSV, images, PDFs, and browsable folders |
+| Read Markdown | Dedicated document windows, outline, find, source view, local images, live reload, and default-app support |
 | Organize | Named and pinned shelves, original-file references, independent saved copies, and undo for removals |
 | Use elsewhere | Copy files to Finder, open originals, reveal locations, use Quick Look, export ZIPs and rendered PDFs |
 | Collect outputs | Watch selected folders for newly completed files, with extension filtering |
@@ -30,7 +31,7 @@ Built with **Swift + AppKit**, **system WebKit**, and **React + shadcn/ui**. Ava
 2. Extract the archive and move **Relay Shelf.app** into **Applications**.
 3. Open the app. Use its menu-bar icon or **⌘⇧Space** to bring the shelf back after closing the window.
 
-The published build is for Apple Silicon. Runtime checks were performed on macOS 27.2. Developer ID signing and notarization are still pending. [Release downloads](https://github.com/AryanRG/relay-shelf/releases/tag/v1.1.1)
+The published build is for Apple Silicon. Runtime checks were performed on macOS 27.2. Developer ID signing and notarization are still pending. [Release downloads](https://github.com/AryanRG/relay-shelf/releases/tag/v1.2.0)
 
 To verify the archives, download both ZIP assets and `SHA256SUMS.txt` into the same folder, then run the following command from that folder.
 
@@ -58,6 +59,20 @@ The following examples use placeholder locations. Replace them with paths on you
 | Multiple items | Paste one file or folder path per line |
 
 For relative paths such as `./src/App.tsx`, set **Project root** in Preferences. Source-location suffixes are recognized while resolving the underlying file. Folder paths open a browsable preview.
+
+## Markdown reader
+
+Open an `.md` or `.markdown` file in Relay Shelf to read it in a dedicated document window. Choose **File → Make Default Markdown Viewer** to use it when opening Markdown files from Finder. macOS may ask you to confirm the association.
+
+The reader provides rendered GitHub-flavored Markdown, source view, a heading outline, **⌘F** find, adjustable font size, and **⌘R** refresh. File changes refresh automatically, including saves that replace the file. Each document has its own window, and reopening a file brings its existing window forward.
+
+Relative Markdown links open another reader and support heading anchors. Local images use bounded previews. Remote images stay as placeholders, and web links open in your browser when clicked. Raw HTML is disabled.
+
+Use **Document actions** to copy source or path, reveal the file, export a PDF, open TextEdit, or return to the shelf. Opening a document in the reader leaves shelf membership unchanged. The shelf preview also offers **Open Markdown viewer**.
+
+If macOS blocks a document, linked file, or local image, choose **Document actions → Choose file or folder…** and select the document or its containing folder. The same recovery action appears with read errors.
+
+The reader accepts UTF-8 and UTF-16 text up to 2 MiB. Larger documents display an explicit partial-document notice, with full-source copy and PDF export disabled. Local images are limited to 20 MiB per source and downsampled for display.
 
 ## Everyday use
 
@@ -129,10 +144,11 @@ From a source checkout, the launcher imports files into the running app or start
 
 ```sh
 ./scripts/relay-shelf ~/Documents/report.md
+./scripts/relay-shelf --view ~/Documents/report.md
 ./scripts/relay-shelf --shelf "Project handoff" ~/Documents/report.md ~/Desktop/evidence.png
 ```
 
-The launcher uses the installed application in `/Applications` when available, then the sibling build output. The native executable accepts `--add`, `--shelf NAME`, and `--show`.
+The launcher uses the installed application in `/Applications` when available, then the sibling build output. The native executable accepts `--add`, `--view`, `--shelf NAME`, and `--show`.
 
 ## Local storage and permissions
 
@@ -155,7 +171,8 @@ Preview work is bounded to keep large files manageable.
 | Preview | Limit |
 | --- | --- |
 | Text | Reads up to 256 KB |
-| Rendered Markdown | Renders up to 120,000 characters |
+| Shelf Markdown preview | Renders up to 120,000 characters |
+| Dedicated Markdown reader | Reads up to 2 MiB |
 | Images | Downsamples to a maximum dimension of 1,600 pixels |
 | Folders | Lists up to 500 visible children |
 
@@ -191,6 +208,8 @@ For isolated development, set `RELAY_SHELF_DATA_DIR` to a separate directory whe
 | `native/NativeDragOverlay.swift` | Floating shelf view and native drag interaction over shelf rows |
 | `native/FloatingShelfLifecycle.swift` | Floating shelf retention, idle expiry, and drag outcomes |
 | `native/ShelfStore.swift` | Persistent state, captures, copies, previews, and shelf actions |
+| `native/MarkdownViewerController.swift` | Dedicated reader windows, bounded reads, live refresh, and document actions |
+| `native/MarkdownSupport.swift` | Markdown document types and default-app association |
 | `native/PathResolver.swift` | Local filesystem path parsing |
 | `native/DirectoryWatcher.swift` | Event-driven folder monitoring |
 | `native/FileActions.swift` | Image transforms, OCR, PDF merging, and image-to-PDF generation |
@@ -202,7 +221,8 @@ For isolated development, set `RELAY_SHELF_DATA_DIR` to a separate directory whe
 
 ## Verification status
 
-- **Automated checks passed** — 427 path-resolution assertions, 63 directory-watcher assertions, and integration checks for storage, persistence, concurrent imports, cleanup, undo, preview limits, CLI routing, instance locking, PDF generation, floating-shelf lifecycle and docking, saved-destination copies, legacy-state migration, media processing, OCR, and controlled screenshot/Shortcut subprocesses.
+- **Automated checks passed** — 427 path-resolution assertions, 63 directory-watcher assertions, and integration checks for storage, persistence, concurrent imports, cleanup, undo, preview limits, CLI routing, instance locking, PDF generation, floating-shelf lifecycle and docking, saved-destination copies, legacy-state migration, media processing, OCR, controlled screenshot/Shortcut subprocesses, and 131 dedicated Markdown-reader assertions.
+- **Frontend Markdown checks passed** — 60 browser assertions with a mocked native bridge for rendering, search, navigation, recovery, image loading, PDF preparation, and responsive layout.
 - **Live checks passed** — quoted home-relative path import, document previews, persistent shelves, native file selection, clipboard file delivery into Finder, ZIP export, and rendered PDF export.
 - **Manual verification pending** — cross-application drag-and-drop delivery.
 - **Distribution limits** — Apple Silicon build, runtime-tested on macOS 27.2, ad-hoc signing, and Developer ID notarization pending.

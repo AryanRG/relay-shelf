@@ -98,6 +98,14 @@ export interface Preview {
   entries?: ResolvedPath[];
   error?: string;
 }
+export interface MarkdownDocument {
+  name: string;
+  path: string;
+  text: string;
+  truncated: boolean;
+  modifiedAt: string;
+  anchor?: string;
+}
 export interface RelayAPI {
   invoke<T = ShelfState>(
     command: string,
@@ -123,6 +131,7 @@ export interface RelayAPI {
 declare global {
   interface Window {
     relay?: RelayAPI;
+    __relayMarkdownViewer?: boolean;
   }
 }
 
@@ -130,6 +139,16 @@ declare global {
 getState -> ShelfState
 resolve {text, basePath?} -> ResolvedPath[]
 preview {path} -> Preview (paths from resolve/items/folder entries)
+openMarkdownViewer {path} -> null (separate document window)
+markdownDocument -> MarkdownDocument (reader window's current document; 2 MiB read limit)
+markdownImage {source} -> {url?:string} (native-approved local embedded image only)
+markdownOpenLink {href} -> null (reader handles same-document anchors inline)
+markdownCopy {kind:'source'|'path'} -> null
+markdownReveal / markdownOpenShelf / markdownMakeDefault / markdownOpenInEditor -> null
+markdownExportPDF {html} -> {path?:string}
+markdownChooseAccess -> boolean (native file/folder picker; dispatches refresh on grant)
+Reader refresh notification: window event 'relay-markdown-changed'
+Reader anchor notification: CustomEvent<string> 'relay-markdown-anchor'
 add {paths:string[], shelfId, storage?, lines?:Record<string,number>} -> ShelfState
 addText {text, shelfId, name?} -> ShelfState
 captureClipboard {shelfId} -> ShelfState (files, existing paths, image, text/link)
