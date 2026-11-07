@@ -1,0 +1,11 @@
+#!/bin/bash
+set -euo pipefail
+SOURCE_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+APP="$SOURCE_DIR/../Relay Shelf.app"
+if [ -d "/Applications/Relay Shelf.app" ]; then APP="/Applications/Relay Shelf.app"; fi
+if [ "${1:-}" = "--help" ]; then
+  echo 'Usage: relay-shelf [--shelf NAME] FILE_OR_FOLDER ...'
+  echo 'Add files to a running shelf, or launch Relay Shelf.'
+  exit 0
+fi
+open -n -a "$APP" --args --add "$@"
