@@ -18,6 +18,7 @@ final class DragController: NSObject {
   private var persistedFloatingShelfIDs: [String] = []
   private var idleTimer: Timer?
   private var outgoingFromFloatingShelf = false
+  private var outgoingFloatingIDs: [String] = []
   private var panel: NSPanel?
   private var globalMonitor: Any?
   private var localMonitor: Any?
@@ -287,17 +288,35 @@ final class DragController: NSObject {
     // Import/history logic also runs without a web view (e.g. before attachment).
     guard webView != nil else { return }
     ensurePanel()
+    let ids = floatingShelf.itemIDs
+    let records = store.snapshot()["items"] as? [[String: Any]] ?? []
+    let byID = Dictionary(uniqueKeysWithValues: records.compactMap { record -> (String, [String: Any])? in
+      guard let id = record["id"] as? String else { return nil }
+      return (id, record)
+    })
+    let items = ids.map { id in
+      FloatingShelfItem(id: id, name: byID[id]?["name"] as? String ?? "Unavailable file",
+        path: byID[id]?["path"] as? String ?? "", kind: byID[id]?["kind"] as? String ?? "file")
+    }
+    if let panel {
+      let size = ShelfDropView.preferredSize(itemCount: items.count)
+      if panel.frame.size != size {
+        var frame = NSRect(x: panel.frame.minX, y: panel.frame.maxY - size.height,
+          width: size.width, height: size.height)
+        if let screen = NSScreen.screens.first(where: { $0.frame.intersects(panel.frame) }) ?? NSScreen.main {
+          let visible = screen.visibleFrame.insetBy(dx: 8, dy: 8)
+          frame.origin.x = max(visible.minX, min(frame.minX, visible.maxX - frame.width))
+          frame.origin.y = max(visible.minY, min(frame.minY, visible.maxY - frame.height))
+        }
+        panel.setFrame(frame, display: true)
+      }
+    }
     if let edge = floatingShelf.dockEdge, let panel {
       panel.setFrame(Self.dockedFrame(panel.frame, edge: edge,
         visibleFrames: NSScreen.screens.map(\.visibleFrame)), display: true)
     } else if panel?.isVisible != true { positionPanel(near: NSEvent.mouseLocation) }
-    let ids = floatingShelf.itemIDs
-    let items = store.snapshot()["items"] as? [[String: Any]] ?? []
-    let name = ids.first.flatMap { id in
-      items.first { $0["id"] as? String == id }?["name"] as? String
-    }
     (panel?.contentView as? ShelfDropView)?.update(
-      ids: ids, name: name, pending: floatingShelf.pendingCount,
+      items: items, pending: floatingShelf.pendingCount,
       failed: floatingShelf.importFailed, dockEdge: floatingShelf.dockEdge)
     panel?.orderFrontRegardless()
     if let deadline = floatingShelf.deadline {
@@ -602,7 +621,14 @@ final class DragController: NSObject {
       return item
     }
     nativeDrag = true
-    outgoingFromFloatingShelf = source is ShelfDropView
+    outgoingFromFloatingShelf = source is ShelfDropView || source is FloatingShelfRow
+    let availablePaths = Set(urls.map(\.path))
+    let requested = Set(ids)
+    outgoingFloatingIDs = (store.snapshot()["items"] as? [[String: Any]] ?? []).compactMap { item in
+      guard let id = item["id"] as? String, requested.contains(id),
+        let path = item["path"] as? String, availablePaths.contains(path) else { return nil }
+      return id
+    }
     floatingShelf.beginOutgoingDrag()
     resetExternalDrag()
     let session = source.beginDraggingSession(with: items, event: event, source: source)
@@ -614,8 +640,10 @@ final class DragController: NSObject {
     // Copy-only sessions leave shelf items intact on both success and cancellation.
     nativeDrag = false
     floatingShelf.endOutgoingDrag(succeeded: outgoingFromFloatingShelf
-      && !operation.intersection([.copy, .move, .link]).isEmpty)
+      && !operation.intersection([.copy, .move, .link]).isEmpty,
+      deliveredIDs: outgoingFloatingIDs)
     outgoingFromFloatingShelf = false
+    outgoingFloatingIDs = []
     lastMouseEvent = nil
     preparedDragIDs = []
     dragOrigin = nil

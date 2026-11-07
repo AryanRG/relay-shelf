@@ -10,6 +10,7 @@ struct DragControllerTests {
     testDocking()
     testCaptureLifecycle()
     testFloatingControls()
+    testFloatingList()
     let files = FileManager.default
     let temporary = files.temporaryDirectory.appendingPathComponent("RelayDragTests-\(UUID())")
     try files.createDirectory(at: temporary, withIntermediateDirectories: true)
@@ -273,7 +274,9 @@ struct DragControllerTests {
     precondition(!panel.isVisible && controller.floatingShelf.itemIDs.count == 2)
     controller.setCapturePresentationHidden(false)
     precondition(panel.isVisible && controller.floatingShelf.dockEdge == .left)
-    precondition(panel.frame == dockedFrame && controller.floatingShelf.deadline == nil)
+    precondition(panel.frame.minX == dockedFrame.minX
+      && panel.frame.size == ShelfDropView.preferredSize(itemCount: 2)
+      && controller.floatingShelf.deadline == nil)
 
     controller.setCapturePresentationHidden(true)
     controller.closeFloatingShelf()
@@ -445,7 +448,7 @@ struct DragControllerTests {
       root.subviews.flatMap { [$0] + descendants($0) }
     }
     for edge: FloatingShelfLifecycle.DockEdge? in [nil, .left, .right] {
-      view.update(ids: ["item"], name: String(repeating: "Long filename ", count: 20),
+      view.update(items: [FloatingShelfItem(id: "item", name: String(repeating: "Long filename ", count: 20), path: "/tmp/example.txt", kind: "file")],
         pending: 0, failed: false, dockEdge: edge)
       view.layoutSubtreeIfNeeded()
       let controls = descendants(view).filter {
@@ -465,6 +468,51 @@ struct DragControllerTests {
       precondition(controls.compactMap { $0 as? NSButton }.count == 4)
     }
     print("PASS native floating controls fit in undocked and both docked layouts")
+  }
+
+  private static func testFloatingList() {
+    let sample = (0..<12).map { index in
+      FloatingShelfItem(id: "item-\(index)", name: "Document \(index).md",
+        path: "/tmp/Document \(index).md", kind: "file")
+    }
+    let size = ShelfDropView.preferredSize(itemCount: sample.count)
+    let window = NSWindow(contentRect: NSRect(origin: .zero, size: size),
+      styleMask: [.borderless], backing: .buffered, defer: false)
+    window.isReleasedWhenClosed = false
+    defer { window.close() }
+    let view = ShelfDropView(frame: NSRect(origin: .zero, size: size))
+    window.contentView = view
+    view.update(items: sample, pending: 0, failed: false, dockEdge: .right)
+    view.layoutSubtreeIfNeeded()
+    func descendants(_ root: NSView) -> [NSView] {
+      root.subviews.flatMap { [$0] + descendants($0) }
+    }
+    let scroll = descendants(view).compactMap { $0 as? NSScrollView }.first!
+    let rows = descendants(scroll).compactMap { $0 as? FloatingShelfRow }
+    precondition(rows.map(\.item) == sample, "Every item must have its own ordered row")
+    precondition(scroll.documentView!.frame.height > scroll.contentView.bounds.height)
+    precondition(scroll.documentView!.isFlipped, "Scrolling must start at the first item")
+    let row = rows[0]
+    let hit = view.hitTest(view.convert(NSPoint(x: 30, y: 18), from: row))
+    precondition(hit === row, "The shelf must preserve individual row hit testing")
+    view.update(items: sample, pending: 1, failed: false)
+    precondition(descendants(scroll).compactMap { $0 as? FloatingShelfRow }.first === row,
+      "Status updates should reuse rows")
+    view.update(items: Array(sample.prefix(2)), pending: 0, failed: false)
+    precondition(descendants(scroll).compactMap { $0 as? FloatingShelfRow }.count == 2)
+    let lifecycle = FloatingShelfLifecycle()
+    lifecycle.showRetained(ids: ["a", "b", "c"])
+    lifecycle.setDocked(.right)
+    lifecycle.beginOutgoingDrag()
+    lifecycle.endOutgoingDrag(succeeded: false, deliveredIDs: ["a"])
+    precondition(lifecycle.itemIDs == ["a", "b", "c"])
+    lifecycle.beginOutgoingDrag()
+    lifecycle.endOutgoingDrag(succeeded: true, deliveredIDs: ["b"])
+    precondition(lifecycle.itemIDs == ["a", "c"] && lifecycle.isVisible && lifecycle.dockEdge == .right)
+    lifecycle.beginOutgoingDrag()
+    lifecycle.endOutgoingDrag(succeeded: true, deliveredIDs: ["a", "c"])
+    precondition(!lifecycle.isVisible)
+    print("PASS scrollable ordered file rows, row hit testing/reuse, partial drag retention and drag-all dismissal")
   }
 
   private static func testLifecycle() {

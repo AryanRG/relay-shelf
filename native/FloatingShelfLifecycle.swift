@@ -99,9 +99,15 @@ final class FloatingShelfLifecycle {
   }
   func beginOutgoingDrag() { outgoing = true; rearm() }
 
-  func endOutgoingDrag(succeeded: Bool) {
+  func endOutgoingDrag(succeeded: Bool, deliveredIDs: [String]? = nil) {
     outgoing = false
-    if succeeded { dismiss() } else { rearm() }
+    guard succeeded else { rearm(); return }
+    if let deliveredIDs {
+      let delivered = Set(deliveredIDs)
+      for index in batches.indices { batches[index].ids.removeAll { delivered.contains($0) } }
+      if !itemIDs.isEmpty || pendingCount > 0 { rearm(); return }
+    }
+    dismiss()
   }
 
   func dismiss() {

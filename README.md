@@ -4,7 +4,7 @@ A lightweight macOS file shelf for collecting files, pasting paths, and previewi
 
 Built with **Swift + AppKit**, **system WebKit**, and **React + shadcn/ui**. Available under the **MIT license**.
 
-[Download the macOS prerelease](https://github.com/AryanRG/relay-shelf/releases/tag/v1.1.0) · [Build from source](#build-from-source) · [Report an issue](https://github.com/AryanRG/relay-shelf/issues)
+[Download the macOS prerelease](https://github.com/AryanRG/relay-shelf/releases/tag/v1.1.1) · [Build from source](#build-from-source) · [Report an issue](https://github.com/AryanRG/relay-shelf/issues)
 
 > **Early prerelease.** Requires Apple Silicon and macOS 14 or newer. The download is ad-hoc signed and unnotarized, so macOS may block it from opening. Cross-application drag delivery still needs manual verification.
 
@@ -30,7 +30,7 @@ Built with **Swift + AppKit**, **system WebKit**, and **React + shadcn/ui**. Ava
 2. Extract the archive and move **Relay Shelf.app** into **Applications**.
 3. Open the app. Use its menu-bar icon or **⌘⇧Space** to bring the shelf back after closing the window.
 
-The published build is for Apple Silicon. Runtime checks were performed on macOS 27.2. Developer ID signing and notarization are still pending. [Release downloads](https://github.com/AryanRG/relay-shelf/releases/tag/v1.1.0)
+The published build is for Apple Silicon. Runtime checks were performed on macOS 27.2. Developer ID signing and notarization are still pending. [Release downloads](https://github.com/AryanRG/relay-shelf/releases/tag/v1.1.1)
 
 To verify the archives, download both ZIP assets and `SHA256SUMS.txt` into the same folder, then run the following command from that folder.
 
@@ -81,7 +81,7 @@ Add a folder under **Preferences → Folder watches** and choose its destination
 
 Preferences offer pointer shake while dragging, dragging to a screen edge, activation when a supported file drag begins, and manual activation. You can also enable **Always on top**, **Open at login**, and light, dark, or system appearance.
 
-After a drop, the floating shelf displays the captured item or item count and stays available for dragging out. Additional drops join the same floating shelf. Use **Open shelf** to view the full collection or the close button to dismiss the small window.
+After a drop, the floating shelf stays available for dragging out. Multiple items appear as individual file rows, with scrolling for longer lists. Drag a row to take one file, or drag the heading to take the whole group. Successfully dragging one row keeps the other items available. Additional drops join the same floating shelf. Use **Open shelf** to view the full collection or the close button to dismiss the small window.
 
 The floating shelf closes after a successful drag-out or 60 seconds of inactivity. Hovering, receiving a drop, and dragging out pause the idle timeout. A canceled drag keeps the shelf available. Captured items remain in the main shelf after the floating window closes.
 

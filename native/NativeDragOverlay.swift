@@ -6,11 +6,83 @@ struct NativeDragRegion {
   let rect: NSRect
 }
 
+struct FloatingShelfItem: Equatable {
+  let id: String
+  let name: String
+  let path: String
+  let kind: String
+}
+
+@MainActor
+private final class FloatingShelfRows: NSStackView {
+  override var isFlipped: Bool { true }
+}
+
+@MainActor
+final class FloatingShelfRow: NSView, NSDraggingSource {
+  let item: FloatingShelfItem
+  weak var controller: DragController?
+  private var mouseOrigin: NSPoint?
+
+  init(item: FloatingShelfItem) {
+    self.item = item
+    super.init(frame: .zero)
+    let icon = NSImageView(image: NSImage(systemSymbolName: item.kind == "folder" ? "folder" : "doc",
+      accessibilityDescription: nil) ?? NSImage())
+    icon.contentTintColor = .secondaryLabelColor
+    let name = NSTextField(labelWithString: item.name)
+    name.font = .systemFont(ofSize: 12)
+    name.lineBreakMode = .byTruncatingMiddle
+    name.maximumNumberOfLines = 1
+    name.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+    for child in [icon, name] {
+      child.translatesAutoresizingMaskIntoConstraints = false
+      addSubview(child)
+    }
+    NSLayoutConstraint.activate([
+      heightAnchor.constraint(equalToConstant: 36),
+      icon.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
+      icon.centerYAnchor.constraint(equalTo: centerYAnchor),
+      icon.widthAnchor.constraint(equalToConstant: 18),
+      icon.heightAnchor.constraint(equalToConstant: 20),
+      name.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 8),
+      name.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
+      name.centerYAnchor.constraint(equalTo: centerYAnchor),
+    ])
+    toolTip = item.path.isEmpty ? item.name : item.path
+    setAccessibilityElement(true)
+    setAccessibilityRole(.row)
+    setAccessibilityLabel(item.name)
+    setAccessibilityHelp("Drag this file from the shelf")
+  }
+
+  required init?(coder: NSCoder) { fatalError("init(coder:) is unavailable") }
+  override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+  override func hitTest(_ point: NSPoint) -> NSView? { super.hitTest(point) == nil ? nil : self }
+  override func mouseDown(with event: NSEvent) { mouseOrigin = event.locationInWindow }
+  override func mouseUp(with event: NSEvent) { mouseOrigin = nil }
+  override func mouseDragged(with event: NSEvent) {
+    guard let origin = mouseOrigin,
+      hypot(event.locationInWindow.x - origin.x, event.locationInWindow.y - origin.y) >= 4 else { return }
+    mouseOrigin = nil
+    controller?.beginNativeDrag(ids: [item.id], event: event, source: self)
+  }
+  func draggingSession(_ session: NSDraggingSession,
+    sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation { .copy }
+  func ignoreModifierKeys(for session: NSDraggingSession) -> Bool { true }
+  func draggingSession(_ session: NSDraggingSession, endedAt screenPoint: NSPoint,
+    operation: NSDragOperation) { controller?.dragEnded(operation: operation) }
+}
+
 /// A small native destination becomes a drag source once its imports commit.
 @MainActor
 final class ShelfDropView: NSVisualEffectView, NSDraggingSource {
   weak var controller: DragController?
   private var ids: [String] = []
+  private var listedItems: [FloatingShelfItem] = []
+  private let fileList = NSScrollView()
+  private let rows = FloatingShelfRows()
+  private var listHeight: NSLayoutConstraint!
   private var tracking: NSTrackingArea?
   private let title = NSTextField(labelWithString: "Drop into Relay Shelf")
   private let subtitle = NSTextField(labelWithString: "Files, links, images & text")
@@ -25,7 +97,7 @@ final class ShelfDropView: NSVisualEffectView, NSDraggingSource {
     state = .active
     wantsLayer = true
     layer?.cornerRadius = 18
-    toolTip = "Drag items from the center. Drag the top edge to move this shelf."
+    toolTip = "Drag a file row individually or drag the heading for all files. Drag the top edge to move this shelf."
     resetHighlight()
     registerForDraggedTypes(DragController.pasteboardTypes)
 
@@ -56,7 +128,28 @@ final class ShelfDropView: NSVisualEffectView, NSDraggingSource {
     let docking = NSStackView(views: [dockLeft, dockRight, undock])
     docking.spacing = 8
     undock.isHidden = true
-    let stack = NSStackView(views: [icon, title, subtitle, docking, controls])
+    fileList.hasVerticalScroller = true
+    fileList.autohidesScrollers = true
+    fileList.drawsBackground = false
+    fileList.borderType = .noBorder
+    fileList.wantsLayer = true
+    fileList.layer?.cornerRadius = 8
+    fileList.layer?.borderWidth = 1
+    fileList.layer?.borderColor = NSColor.separatorColor.cgColor
+    fileList.layer?.masksToBounds = true
+    fileList.setAccessibilityLabel("Files on floating shelf")
+    rows.orientation = .vertical
+    rows.alignment = .leading
+    rows.spacing = 0
+    rows.translatesAutoresizingMaskIntoConstraints = false
+    fileList.documentView = rows
+    rows.leadingAnchor.constraint(equalTo: fileList.contentView.leadingAnchor).isActive = true
+    rows.topAnchor.constraint(equalTo: fileList.contentView.topAnchor).isActive = true
+    rows.widthAnchor.constraint(equalTo: fileList.contentView.widthAnchor).isActive = true
+    listHeight = fileList.heightAnchor.constraint(equalToConstant: 0)
+    listHeight.isActive = true
+    fileList.isHidden = true
+    let stack = NSStackView(views: [icon, title, fileList, subtitle, docking, controls])
     stack.orientation = .vertical
     stack.spacing = 8
     stack.translatesAutoresizingMaskIntoConstraints = false
@@ -65,6 +158,7 @@ final class ShelfDropView: NSVisualEffectView, NSDraggingSource {
       stack.centerXAnchor.constraint(equalTo: centerXAnchor),
       stack.centerYAnchor.constraint(equalTo: centerYAnchor),
       stack.widthAnchor.constraint(equalTo: widthAnchor, constant: -28),
+      fileList.widthAnchor.constraint(equalTo: stack.widthAnchor),
       title.widthAnchor.constraint(lessThanOrEqualTo: stack.widthAnchor),
       subtitle.widthAnchor.constraint(lessThanOrEqualTo: stack.widthAnchor),
       stack.topAnchor.constraint(greaterThanOrEqualTo: topAnchor, constant: 20),
@@ -82,21 +176,41 @@ final class ShelfDropView: NSVisualEffectView, NSDraggingSource {
     guard let hit = super.hitTest(point) else { return nil }
     var ancestor: NSView? = hit
     while let view = ancestor, view !== self {
-      if view is NSButton { return hit }
+      if view is NSButton || view is NSScrollView { return hit }
       ancestor = view.superview
     }
     return self
   }
 
-  func update(ids: [String], name: String?, pending: Int, failed: Bool,
+  static func preferredSize(itemCount: Int) -> NSSize {
+    NSSize(width: itemCount > 1 ? 360 : 320,
+      height: itemCount > 1 ? 214 + min(itemCount, 5) * 36 : 206)
+  }
+
+  func update(items: [FloatingShelfItem], pending: Int, failed: Bool,
               dockEdge: FloatingShelfLifecycle.DockEdge? = nil) {
-    self.ids = ids
+    ids = items.map(\.id)
+    if items != listedItems {
+      for row in rows.arrangedSubviews { rows.removeArrangedSubview(row); row.removeFromSuperview() }
+      for item in items {
+        let row = FloatingShelfRow(item: item)
+        row.controller = controller
+        rows.addArrangedSubview(row)
+        row.widthAnchor.constraint(equalTo: rows.widthAnchor).isActive = true
+      }
+      listedItems = items
+    }
+    fileList.isHidden = items.count < 2
+    listHeight.constant = items.count > 1 ? CGFloat(min(items.count, 5) * 36 + 2) : 0
     title.stringValue = ids.isEmpty
       ? (pending > 0 ? "Adding to Relay Shelf…" : "Drop into Relay Shelf")
-      : (ids.count == 1 ? (name ?? "1 item") : "\(ids.count) items · \(name ?? "Relay Shelf")")
+      : (ids.count == 1 ? items[0].name : "Drag all \(ids.count) items")
     subtitle.stringValue = pending > 0 ? "Receiving \(pending) drop\(pending == 1 ? "" : "s")…"
       : (ids.isEmpty ? "Files, links, images & text" : "Drag items out · closes after 60s idle")
-    if dockEdge != nil && pending == 0 { subtitle.stringValue = "Docked · stays until closed or dragged out" }
+    if items.count > 1 && pending == 0 { subtitle.stringValue = "Drag a row or all items · 60s idle" }
+    if dockEdge != nil && pending == 0 {
+      subtitle.stringValue = items.count > 1 ? "Docked · drag a row or all items" : "Docked · stays until closed or dragged out"
+    }
     if failed { subtitle.stringValue = "Nothing added · try dropping again" }
     dockLeft.isHidden = dockEdge == .left
     dockRight.isHidden = dockEdge == .right
