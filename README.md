@@ -1,84 +1,166 @@
 # Relay Shelf
 
-A personal macOS shelf for files, folders, pasted locations, images, links, and text. The app uses Swift/AppKit for filesystem operations, system integration, and drag-and-drop. Its bundled React interface uses shadcn/ui components inside macOS WebKit.
+A lightweight macOS file shelf for collecting files, pasting paths, and previewing documents. Keep a report, screenshot, folder, or snippet together while moving between your editor, terminal, Finder, and other apps.
 
-## Download
+Built with **Swift + AppKit**, **system WebKit**, and **React + shadcn/ui**. Available under the **MIT license**.
 
-The initial release is a prerelease for Apple Silicon Macs running macOS 14 or newer. Cross-application drag delivery still needs manual verification.
+[Download the macOS prerelease](https://github.com/AryanRG/relay-shelf/releases/tag/v1.0.0) · [Build from source](#build-from-source) · [Report an issue](https://github.com/AryanRG/relay-shelf/issues)
 
-Download `Relay-Shelf-macOS.zip`, extract it, and move **Relay Shelf.app** into Applications. The download is locally ad-hoc signed and has no Developer ID notarization, so macOS may block it from opening. Building from source is also supported. [GitHub releases](https://github.com/AryanRG/relay-shelf/releases)
+> **Early prerelease.** Requires Apple Silicon and macOS 14 or newer. The download is ad-hoc signed and unnotarized, so macOS may block it from opening. Cross-application drag delivery still needs manual verification.
 
-Release assets include a `SHA256SUMS.txt` file. To check downloaded archives, place them beside that file and run `shasum -a 256 -c SHA256SUMS.txt`.
+## What you can do
 
-## Use
+| Workflow | Features |
+| --- | --- |
+| Capture | Paste file and folder paths, choose files, capture clipboard files, images, links, and text |
+| Preview | Rendered and source Markdown, text, JSON, CSV, images, PDFs, and browsable folders |
+| Organize | Named and pinned shelves, original-file references, independent saved copies, and undo for removals |
+| Use elsewhere | Copy files to Finder, open originals, reveal locations, use Quick Look, export ZIPs and rendered PDFs |
+| Collect outputs | Watch selected folders for newly completed files, with extension filtering |
+| Stay within reach | Menu-bar access, global shortcuts, always-on-top mode, and configurable drag activation |
+| Work from the terminal | Import files into a running instance and route them to a named shelf |
 
-Open **Relay Shelf.app**. Its menu-bar icon keeps the app available after closing the main window.
+## Install
 
-- **⌘⇧Space** opens the shelf.
-- **⌘⌥⇧V** captures the clipboard into the app.
-- **Paste location** accepts quoted paths, `~/` paths, file URLs, Markdown links, multiple lines, and line references.
-- Select an item to preview it. Markdown has rendered and source views. Folders can be browsed inside the preview panel.
-- Native drag-out is implemented for selected items. Cross-application delivery is awaiting manual verification. **Copy files** and Finder paste passed a live check.
-- Shake the pointer while dragging to open the floating native target. Settings also offer screen-edge activation and activation whenever a supported drag begins.
-- Add watched folders in Settings to collect newly completed outputs. A watcher observes the selected folder's immediate children.
-- Use named shelves to organize files. Selected files can be copied, retained as separate snapshots, or exported together as a ZIP.
+1. Download `Relay-Shelf-macOS.zip` from the release page.
+2. Extract the archive and move **Relay Shelf.app** into **Applications**.
+3. Open the app. Use its menu-bar icon or **⌘⇧Space** to bring the shelf back after closing the window.
 
-**Reference original** follows the source file. **Keep a copy** creates an independent app-managed copy. Removing an entry removes its shelf membership. Undo restores the last removed group or shelf. Captured text and images are stored locally.
+The published build is for Apple Silicon. Runtime checks were performed on macOS 27.2. Developer ID signing and notarization are still pending. [Release downloads](https://github.com/AryanRG/relay-shelf/releases/tag/v1.0.0)
 
-Text previews read up to 256 KB, image previews are downsampled to a maximum dimension of 1,600 pixels, and folder previews include up to 500 visible children. The interface labels shortened previews. Quick Look and Open provide access to the original document.
+To verify the archives, download both ZIP assets and `SHA256SUMS.txt` into the same folder, then run the following command from that folder.
 
-macOS may request access to protected locations such as Documents. If a read is waiting on permission, the preview offers **Choose file…** to select that file or its containing folder through the native picker. Rebuilding an ad-hoc-signed app can cause macOS to request access again.
+```sh
+shasum -a 256 -c SHA256SUMS.txt
+```
+
+## Paste a path and see the file
+
+1. Open **Paste location** and paste a file or folder location.
+2. Select a resolved result to preview its contents before adding it.
+3. Choose **Reference original** or **Keep a copy**, then add it to the current shelf.
+4. Use **Open**, **Quick Look**, or **Copy files** when you need the item elsewhere. After copying files, paste in a Finder folder with **⌘V**.
+
+The following examples use placeholder locations. Replace them with paths on your Mac.
+
+| Input | Example |
+| --- | --- |
+| Home-relative path | `~/Documents/report.md` |
+| Quoted path with spaces | `"~/Documents/Project notes.md"` |
+| Absolute path | `/Users/you/Documents/report.pdf` |
+| File URL | `file:///Users/you/Documents/report.pdf` |
+| Markdown link | `[Report](~/Documents/report.md)` |
+| Source location | `./src/App.tsx:42` or `./src/App.tsx#L42` |
+| Multiple items | Paste one file or folder path per line |
+
+For relative paths such as `./src/App.tsx`, set **Project root** in Preferences. Source-location suffixes are recognized while resolving the underlying file. Folder paths open a browsable preview.
+
+## Everyday use
+
+### Keep a reference or save a copy
+
+**Reference original** points to the source on disk and reflects changes to that file. Moving or deleting the original can make the reference unavailable.
+
+**Keep a copy** stores an independent snapshot in Relay Shelf’s local data folder. Use it when you want to retain the captured version.
+
+Removing an item removes its shelf membership. Undo restores the last removed group or shelf and is invalidated by unrelated changes.
+
+### Capture the clipboard
+
+Press **⌘⌥⇧V** to capture clipboard files, an image, text, or a link. Captured text and images are saved locally. The paste dialog also has a **Text or link** tab.
+
+### Collect files from a folder
+
+Add a folder under **Preferences → Folder watches** and choose its destination shelf. The watcher observes that folder’s immediate children. Set **Watch file extensions** to filter the files collected.
+
+### Choose how the shelf appears
+
+Preferences offer pointer shake while dragging, dragging to a screen edge, activation when a supported file drag begins, and manual activation. You can also enable **Always on top**, **Open at login**, and light, dark, or system appearance.
+
+Native drag sources and a floating drop target are implemented. End-to-end delivery between applications remains a manual verification item for this prerelease.
 
 ## Command line
 
-The included script launches the app and forwards imports to the running instance.
+From a source checkout, the launcher imports files into the running app or starts it as needed.
 
 ```sh
 ./scripts/relay-shelf ~/Documents/report.md
 ./scripts/relay-shelf --shelf "Project handoff" ~/Documents/report.md ~/Desktop/evidence.png
 ```
 
-The executable also accepts `--add`, `--shelf NAME`, and `--show`.
+The launcher uses the installed application in `/Applications` when available, then the sibling build output. The native executable accepts `--add`, `--shelf NAME`, and `--show`.
 
-## Build
+## Local storage and permissions
 
-Requires macOS, Apple Command Line Tools with a current Swift compiler, and Node.js 22 or newer. The supplied build targets Apple Silicon and macOS 14 or newer.
+Shelf state and captured files live in the following directory.
+
+```text
+~/Library/Application Support/RelayShelf
+```
+
+Back up this folder to preserve shelves and saved copies. Original-file references point to their existing locations. Clipboard capture runs when invoked, and watched folders are selected explicitly in Preferences.
+
+macOS may request access to Documents, Desktop, or Downloads. If a preview is waiting for permission, use **Choose file…** to select the file or its containing folder through the native picker. Rebuilding an ad-hoc-signed app can trigger another permission request.
+
+## Performance and preview limits
+
+Swift/AppKit handles filesystem operations and native integration. The interface uses the operating system’s WebKit, and Node.js is a build-time dependency. Folder monitoring is event-driven.
+
+Preview work is bounded to keep large files manageable.
+
+| Preview | Limit |
+| --- | --- |
+| Text | Reads up to 256 KB |
+| Rendered Markdown | Renders up to 120,000 characters |
+| Images | Downsamples to a maximum dimension of 1,600 pixels |
+| Folders | Lists up to 500 visible children |
+
+Use **Open** or **Quick Look** to view the original document beyond these preview limits.
+
+## Build from source
+
+Install Apple Command Line Tools with a current Swift compiler and Node.js 22 or newer. The build script targets `arm64-apple-macos14.0`.
 
 ```sh
+git clone https://github.com/AryanRG/relay-shelf.git
+cd relay-shelf
 npm ci
 npm run package
+open "../Relay Shelf.app"
 ```
 
-The application is written to `../Relay Shelf.app` and receives a local ad-hoc signature. The production app uses the operating system's WebKit and runs independently of Node.js.
+The build writes `../Relay Shelf.app` with a local ad-hoc signature. Set `RELAY_APP_OUTPUT` to choose a different output location.
 
 ```sh
-npm test
 npm run typecheck
+npm test
 ```
 
-Native tests cover path parsing, storage, persistence, snapshots, undo, folder monitoring, missing files, preview limits, CLI argument ordering, and the single-writer instance lock.
+For isolated development, set `RELAY_SHELF_DATA_DIR` to a separate directory when launching the native executable.
 
-## Local data
+### Source map
 
-State and captured files are stored under `~/Library/Application Support/RelayShelf`. Back up this folder to preserve shelves and saved copies. Referenced originals remain at the locations shown in each item's details.
-
-For isolated development and tests, launch the executable with `RELAY_SHELF_DATA_DIR` set to a separate directory. Folder watching and login startup are configured explicitly in Settings.
-
-## Source layout
-
-- `native/App.swift` contains the app lifecycle, menu bar, window, shortcuts, WebKit bridge, and single-instance delivery.
-- `native/DragController.swift` implements native drag sources, floating targets, and file-promise reception.
-- `native/ShelfStore.swift` handles storage and application actions.
-- `native/PathResolver.swift` parses filesystem references.
-- `native/DirectoryWatcher.swift` monitors folder changes without an idle polling loop.
-- `src/` contains the React and shadcn/ui interface.
-
-Third-party license notices are bundled in the application's Resources directory.
+| Location | Responsibility |
+| --- | --- |
+| `native/App.swift` | App lifecycle, windows, menu bar, shortcuts, WebKit bridge, and single-instance delivery |
+| `native/DragController.swift` | Native drag sources, floating target, and file-promise reception |
+| `native/NativeDragOverlay.swift` | Native drag interaction over shelf rows |
+| `native/ShelfStore.swift` | Persistent state, captures, copies, previews, and shelf actions |
+| `native/PathResolver.swift` | Local filesystem path parsing |
+| `native/DirectoryWatcher.swift` | Event-driven folder monitoring |
+| `native/DocumentPDFExporter.swift` | Bounded rendered PDF generation |
+| `src/` | React interface and shadcn/ui components |
+| `tests/` | Native regression and integration tests |
 
 ## Verification status
 
-Path parsing passed 427 assertions and directory monitoring passed 63 assertions. Storage, concurrent imports, recovery, CLI routing, and bounded PDF generation passed integration tests. Live checks covered a quoted home-relative Markdown path, document preview, persisted shelves, native file selection, copying a file into Finder, and rendered PDF export. Manual confirmation of cross-application drag delivery remains pending.
+- **Automated checks passed** — 427 path-resolution assertions, 63 directory-watcher assertions, and integration checks for storage, persistence, concurrent imports, cleanup, undo, preview limits, CLI routing, instance locking, and PDF generation.
+- **Live checks passed** — quoted home-relative path import, document previews, persistent shelves, native file selection, clipboard file delivery into Finder, ZIP export, and rendered PDF export.
+- **Manual verification pending** — cross-application drag-and-drop delivery.
+- **Distribution limits** — Apple Silicon build, runtime-tested on macOS 27.2, ad-hoc signing, and Developer ID notarization pending.
+
+When reporting an issue, include your macOS version, app version, reproduction steps, and expected behavior. Use placeholder paths and sample files that are safe to share publicly. [Issue tracker](https://github.com/AryanRG/relay-shelf/issues)
 
 ## License
 
-Relay Shelf is distributed under the MIT license. Included dependencies retain their respective licenses. Third-party notices ship inside the app bundle. [MIT license](LICENSE)
+Relay Shelf uses the MIT license. Dependencies retain their respective licenses. The app bundle includes `Contents/Resources/ThirdPartyNotices.txt` and the Relay Shelf license. [MIT license](LICENSE)
